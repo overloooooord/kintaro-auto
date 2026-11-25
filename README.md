@@ -16,6 +16,12 @@
    - **Мобильный шлюз уведомлений (`group=47/661`, `/aweme/v1/notice/multi/` + `/api/violation/v1/get_violation_detail`):** достаёт точный статус (`Effecting`, `Appealing`, `AppealSuccess`, `AppealFailed`), `AppealId`, источник `bric_social`, проверяет плашку `Update your account region` и подаёт апелляцию каскадом из 3 каналов: `POST /api/violation/v1/commit_appeal` → `POST /aweme/v2/appeal/commit/` → фоллбэк в headless Chrome `BytedanceWebview` (`POST /tns-api/appeal/post-commit`).
    - **Постовые ограны в TikTok Studio (`/tiktok/creator/manage/item_list/v1/`):** проверяет до 50 последних постов через `/mod/v1/getPenaltyDetails/` и `/api/moderation/penalties/gettransparencypagecontent`, снимает флаги `For You feed` с человеческой паузой `8.5–17.5с` между постами и по флагу `--hide-rejected` автоматически переводит отклонённые (`FAILED`) посты в `Private`, чтобы не словить 30-дневный бан `punish_type=2048` на весь аккаунт.
 
+8. **Веб-интерфейс KINTARO FARM OS v3.0 (`kintaro-auto web`)** — локальный центр управления на FastAPI + Live SSE (`http://127.0.0.1:8080`):
+   - Боковая навигация на 5 разделов (`Флот и Ограны`, `Импорт и Вход`, `Анти-тень Залив`, `Тени и Аналитика`, `Прокси и Конфиг`) + командная палитра `Ctrl+K`.
+   - Режим Карточки/Таблица, поиск, чекбоксы и плавающая панель массовых действий (`Аудит`, `Снять ограны`, `Прогрев`, `Sync US SIM`, `Сменить прокси`, `Удалить`).
+   - Выдвижной Инспектор аккаунта: проверка и смена прокси (Cloudflare Exit IP/GEO + пинг), редактор Nickname/Bio/Link, чтение Outlook OTP в 1 клик, экспорт `cookies.json` / `x-device.json`, таблица постов Studio со спарклайнами и переводом в `Private`/`Public`.
+   - Drag & Drop `.txt` импорт с предпросмотром парсера и 1-к-1 пулом прокси, Drag & Drop залив медиа с миниатюрами и Fan-Out по выбранным аккаунтам, SVG-графики просмотров и здоровья пула, массовый тестер прокси и визуальный редактор `config.toml`.
+
 > **Важно:** ни один скрипт на стороне клиента не может гарантировать 0% теней, если используются грязные датацентровые прокси (не совпадающие по GEO с `region`), спам-крео под фильтр модерации или убитые аккаунты. Инструмент полностью убирает технические триггеры со стороны API, сессий и дублей медиа.
 
 ## Быстрый старт

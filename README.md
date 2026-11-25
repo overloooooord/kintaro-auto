@@ -78,6 +78,9 @@ uv run kintaro-auto run-queue queue.json --daemon
 # Проверка залитых постов на 0 просмотров / скрытие
 uv run kintaro-auto check-shadows
 
+# Запустить веб-панель управления (Control & Unban Center: мониторинг, Outlook Hub импорт, залив, SSE лог)
+uv run kintaro-auto web --port 8080
+
 # Мгновенный HTTP-аудит всех сессий (RegCountry, CurrentRegion, bric_social, group=47/661 и посты в Studio)
 uv run kintaro-auto audit
 

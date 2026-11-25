@@ -555,27 +555,37 @@ def _fmt_unix_ts(ts: int) -> str:
 
 
 def _print_rich_audit(audit: AccountAuditResult) -> None:
+    health_tag = {
+        "eligible": "[bold green]● ELIGIBLE (Рекомендации открыты)[/bold green]",
+        "appealing": "[bold yellow]● APPEALING (На рассмотрении)[/bold yellow]",
+        "action_required": "[bold red]● ACTION REQUIRED (Активный огран)[/bold red]",
+    }.get(audit.account_health, audit.account_health)
+    px_tag = f"{audit.proxy_country} · {audit.proxy_ip}" if audit.proxy_ip else "OK"
+
     console.print(
-        f"\n[bold cyan]━━━ @{audit.username} (UID: {audit.uid or '?'}) ━━━[/bold cyan] "
-        f"RegCountry=[bold]{audit.reg_country or '?'}[/bold] | "
-        f"CurrentRegion=[bold]{audit.current_region or '?'}[/bold] | "
-        f"IDC=[dim]{audit.idc_gateway}[/dim]"
+        f"\n[bold cyan]━━━ @{audit.uniq_id or audit.username} (UID: {audit.uid or '?'}) ━━━[/bold cyan] {health_tag}\n"
+        f"  Гео: [bold]{audit.reg_country or '?'} → {audit.current_region or '?'}[/bold] | "
+        f"Прокси: [green]{px_tag}[/green] | IDC: [dim]{audit.idc_gateway}[/dim]"
     )
     if audit.region_warning_present:
         console.print(
-            "  [bold red][!] В системных уведомлениях висит 'Update your account region' — "
-            "на аккаунт заходили с чужого GEO IP![/bold red]"
+            "  [yellow][!] Архивная плашка 'Update your account region' в инбоксе "
+            "(ранее был вход не с родного GEO; сейчас выход строго через прокси аккаунта).[/yellow]"
         )
     if audit.recent_device_logins:
-        console.print("  [yellow]Последние входы в системных уведомлениях:[/yellow]")
-        for lg in audit.recent_device_logins[:3]:
-            console.print(f"    • {lg}")
+        console.print(f"  [dim]Последний вход: {audit.recent_device_logins[0]}[/dim]")
 
     console.print(
-        f"  [bold][1] Системные уведомления / Account updates (group=47/661):[/bold] {len(audit.notice_violations)}"
+        f"  [bold][1] Активные ограничения (Account updates / group=47,661):[/bold] {len(audit.notice_violations)}"
     )
     if not audit.notice_violations:
-        console.print("    [green]Чисто — активных карточек нарушений не найдено.[/green]")
+        if audit.restored_notices:
+            r0 = audit.restored_notices[0]
+            console.print(
+                f"    [bold green]✓ Огран снят:[/bold green] {r0.title} ({_fmt_unix_ts(r0.create_time)}, punish_id={r0.punish_id})"
+            )
+        else:
+            console.print("    [green]Чисто — активных ограничений на аккаунте нет.[/green]")
     for v in audit.notice_violations:
         ptype = PUNISH_TYPE_NAMES.get(v.punish_type, f"Type({v.punish_type})")
         console.print(
@@ -588,7 +598,7 @@ def _print_rich_audit(audit: AccountAuditResult) -> None:
 
     flagged = [p for p in audit.post_penalties if p.appeal_status != 2 or p.v2_can_appeal]
     console.print(
-        f"  [bold][2] Посты в TikTok Studio:[/bold] всего {audit.total_posts}, с флагами FYP/модерации: {len(flagged)}"
+        f"  [bold][2] TikTok Studio:[/bold] постов {audit.total_posts} | суммарно просмотров [bold]{audit.total_views}[/bold] | с флагами FYP: {len(flagged)}"
     )
     for p in audit.post_penalties[:10]:
         tag = (
@@ -609,7 +619,7 @@ def audit_command(
     config: Annotated[Path | None, typer.Option("--config", "-c")] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
 ) -> None:
-    """Мгновенный HTTP-аудит (0$ Kintaro, без браузера): регион, `bric_social`, `group=47/661`, статус апелляций и флаги постов в Studio."""
+    """Мгновенный HTTP-аудит (0$ Kintaro, без браузера): прокси-GEO, `bric_social`, `group=47/661`, статус апелляций и флаги постов в Studio."""
     _setup_logging(verbose)
     _, store = _init_env(config)
     targets = (
@@ -625,6 +635,7 @@ def audit_command(
         for acc in targets:
             try:
                 aud = await audit_account_restrictions(acc)
+                store.save_account(acc)
                 results.append(asdict(aud))
                 if not as_json:
                     _print_rich_audit(aud)
@@ -931,6 +942,23 @@ def uniquify_test(
         )
     else:
         raise typer.BadParameter("Поддерживаются форматы .mp4, .jpg, .jpeg, .png")
+
+
+@app.command("web")
+def run_web_dashboard(
+    host: Annotated[str, typer.Option("--host", help="Хост веб-панели")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", "-p", help="Порт веб-панели")] = 8080,
+    config: Annotated[Path | None, typer.Option("--config", "-c")] = None,
+) -> None:
+    """Запустить красивую веб-панель управления (Control & Unban Center) на http://127.0.0.1:8080."""
+    import uvicorn
+    from kintaro_auto.web import create_web_app
+
+    console.print(
+        f"[bold green]🚀 Веб-панель KINTARO Control & Unban Center запущена:[/bold green] "
+        f"[bold cyan]http://{host}:{port}[/bold cyan]"
+    )
+    uvicorn.run(create_web_app(config), host=host, port=port, log_level="warning")
 
 
 if __name__ == "__main__":

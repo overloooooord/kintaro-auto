@@ -24,13 +24,20 @@ IDC_GATEWAY_MAP: dict[str, str] = {
     "us-eastred": "https://api16-normal-no1a.tiktokv.eu",
     "useastred": "https://api16-normal-no1a.tiktokv.eu",
     "euttp": "https://api16-normal-no1a.tiktokv.eu",
+    "euw": "https://api16-normal-no1a.tiktokv.eu",
+    "euw2": "https://api16-normal-no1a.tiktokv.eu",
     "useast1a": "https://api16-normal-c-useast1a.tiktokv.com",
     "useast2a": "https://api16-normal-c-useast2a.tiktokv.com",
+    "va": "https://api16-normal-c-useast1a.tiktokv.com",
+    "maliva": "https://api16-normal-c-useast1a.tiktokv.com",
     "useast5": "https://api16-normal-us.tiktokv.us",
     "useast8": "https://api16-normal-us.tiktokv.us",
-    "maliva": "https://api16-normal-c-useast1a.tiktokv.com",
     "alisg": "https://api16-normal-c-alisg.tiktokv.com",
     "sg1": "https://api16-normal-c-alisg.tiktokv.com",
+    "sg2": "https://api16-normal-c-alisg.tiktokv.com",
+    "my": "https://api16-normal-c-alisg.tiktokv.com",
+    "my2": "https://api16-normal-c-alisg.tiktokv.com",
+    "id": "https://api16-normal-c-alisg.tiktokv.com",
 }
 
 FALLBACK_GATEWAYS = (
@@ -177,15 +184,23 @@ class PostPenalty:
 class AccountAuditResult:
     account_id: str
     username: str
+    uniq_id: str = ""
+    nickname: str = ""
+    avatar_url: str = ""
     uid: str = ""
     reg_country: str = ""
     current_region: str = ""
     idc_gateway: str = ""
+    proxy_ip: str = ""
+    proxy_country: str = ""
+    account_health: str = "eligible"  # "eligible" | "appealing" | "action_required"
     region_warning_present: bool = False
     recent_device_logins: list[str] = field(default_factory=list)
     notice_violations: list[NoticeViolation] = field(default_factory=list)
+    restored_notices: list[NoticeViolation] = field(default_factory=list)
     post_penalties: list[PostPenalty] = field(default_factory=list)
     total_posts: int = 0
+    total_views: int = 0
 
 
 @dataclass
@@ -401,18 +416,67 @@ async def _check_single_post_penalty_http(http: httpx.AsyncClient, pp: PostPenal
         pass
 
 
+def _merge_refreshed_cookies(account: AccountRecord, cookie_jar: httpx.Cookies) -> bool:
+    """Persist refreshed Set-Cookie tokens (ttwid, msToken, odin_tt, etc.) back into x-device."""
+    if not account.device:
+        return False
+    is_str = isinstance(account.device, str)
+    dev = json.loads(account.device) if is_str else dict(account.device)
+    if not isinstance(dev, dict):
+        return False
+    cks = dict(dev.get("cookies") or {})
+    changed = False
+    for cookie in cookie_jar.jar:
+        if cookie.name and cookie.value and cks.get(cookie.name) != cookie.value:
+            cks[cookie.name] = cookie.value
+            changed = True
+    if changed:
+        dev["cookies"] = cks
+        account.device = json.dumps(dev, ensure_ascii=False) if is_str else dev
+    return changed
+
+
+async def probe_proxy_geo(proxy_url: str) -> tuple[str, str]:
+    """Verify proxy exit IP and 2-letter country via Cloudflare trace (never touches TikTok directly)."""
+    if not proxy_url:
+        raise RuntimeError("Прямой выход без прокси заблокирован защитой от 'Update your account region'!")
+    async with httpx.AsyncClient(proxy=proxy_url, timeout=10.0) as c:
+        r = await c.get("https://www.cloudflare.com/cdn-cgi/trace")
+        ip_val = ""
+        loc_val = ""
+        for line in r.text.splitlines():
+            if line.startswith("ip="):
+                ip_val = line.split("=", 1)[1].strip()
+            elif line.startswith("loc="):
+                loc_val = line.split("=", 1)[1].strip().upper()
+        return ip_val, loc_val
+
+
 async def audit_account_restrictions(
     account: AccountRecord,
     *,
     extra_post_ids: list[str] | None = None,
     max_posts: int = 50,
+    verify_proxy_trace: bool = True,
 ) -> AccountAuditResult:
     """
     Fast pure-HTTP audit over the account's sticky SOCKS5/HTTP proxy:
-    - Verifies session & extracts `uid`, `RegistrationCountry`, `CurrentRegion`
-    - Scans mobile IDC gateway `/aweme/v1/notice/multi/` (`group=47/661/...`) + `/api/violation/v1/get_violation_detail`
+    - Verifies proxy exit IP/Country so zero direct requests ever leak
+    - Extracts `uid`, `UniqId`, `NickName`, `AvatarUrl`, `RegistrationCountry`, `CurrentRegion`
+    - Scans mobile IDC gateway `/aweme/v1/notice/multi/` (`group=47/661/...`) + `/api/violation/v1/get_violation_detail`,
+      cleanly separating active/appealing violations from restored (`AppealSuccess`) history
     - Scans TikTok Studio `/tiktok/creator/manage/item_list/v1/` + V1/V2 post penalty endpoints
     """
+    if not account.proxy:
+        raise RuntimeError(f"[{account.account_id}] Прокси не задан — прямой выход заблокирован!")
+
+    proxy_ip, proxy_cc = ("", "")
+    if verify_proxy_trace:
+        try:
+            proxy_ip, proxy_cc = await probe_proxy_geo(account.proxy)
+        except Exception as exc:
+            raise RuntimeError(f"[{account.account_id}] Прокси недоступен ({exc}) — запрос к TikTok отменён.") from exc
+
     cookies = extract_cookie_dict(account)
     headers = {
         "user-agent": DESKTOP_CHROME_UA,
@@ -426,6 +490,9 @@ async def audit_account_restrictions(
         follow_redirects=True,
     ) as http:
         uid = ""
+        uniq_id = ""
+        nickname = ""
+        avatar_url = ""
         reg_country = ""
         current_region = ""
         try:
@@ -436,25 +503,38 @@ async def audit_account_restrictions(
             if r_user.status_code == 200:
                 u_data = r_user.json()
                 uid = str(u_data.get("userId") or "")
-                reg_info = (
+                ub = (
                     (u_data.get("userBaseInfo") or {})
                     .get("UserProfile", {})
                     .get("UserBase", {})
-                    .get("Region", {})
                 )
-                reg_country = str(reg_info.get("RegistrationCountry") or "")
-                current_region = str(reg_info.get("Region") or "")
+                uniq_id = str(ub.get("UniqId") or "")
+                nickname = str(ub.get("NickName") or "")
+                av_obj = ub.get("Avatars") or {}
+                url_list = av_obj.get("UrlList") if isinstance(av_obj, dict) else None
+                if isinstance(url_list, list) and url_list:
+                    avatar_url = str(url_list[0])
+                reg_info = ub.get("Region") or {}
+                reg_country = str(reg_info.get("RegistrationCountry") or "").upper()
+                current_region = str(reg_info.get("Region") or "").upper()
+                if uniq_id and account.username != uniq_id:
+                    account.username = uniq_id
         except Exception:
             pass
 
         idc_gw = await _resolve_idc_gateway(cookies, http)
         audit = AccountAuditResult(
             account_id=account.account_id,
-            username=account.username or account.account_id,
+            username=uniq_id or account.username or account.account_id,
+            uniq_id=uniq_id or account.username or account.account_id,
+            nickname=nickname or uniq_id or account.username or account.account_id,
+            avatar_url=avatar_url,
             uid=uid,
             reg_country=reg_country,
             current_region=current_region,
             idc_gateway=idc_gw,
+            proxy_ip=proxy_ip,
+            proxy_country=proxy_cc,
         )
 
         # Discover active system notice groups
@@ -494,7 +574,6 @@ async def audit_account_restrictions(
             except Exception:
                 continue
 
-        # Sort newest-first by `create_time` so only the latest state per object is surfaced cleanly
         raw_notices.sort(
             key=lambda pair: int(
                 pair[1].get("create_time")
@@ -505,7 +584,8 @@ async def audit_account_restrictions(
         )
 
         seen_punish_ids: set[str] = set()
-        seen_objects: set[str] = set()
+        seen_active_objects: set[str] = set()
+        seen_restored_objects: set[str] = set()
 
         for g_id, item in raw_notices:
             nid = str(item.get("nid_str") or item.get("nid") or "")
@@ -571,13 +651,13 @@ async def audit_account_restrictions(
                 continue
             if punish_id in seen_punish_ids:
                 continue
+            # Inspect up to top 6 distinct punish_ids so an older restored notice never hides a newer active one
+            if len(seen_punish_ids) >= 6:
+                continue
             seen_punish_ids.add(punish_id)
 
             effective_obj_type = object_type or ("4" if object_id == uid else "1")
             obj_dedup = f"{effective_obj_type}:{object_id}"
-            if obj_dedup in seen_objects:
-                continue
-            seen_objects.add(obj_dedup)
 
             try:
                 punish_type = int(punish_type_str)
@@ -605,7 +685,15 @@ async def audit_account_restrictions(
             else:
                 await _enrich_violation_detail(http, idc_gw, vio, uid)
 
-            audit.notice_violations.append(vio)
+            # Separate active/in-review restrictions from restored/expired history!
+            if vio.status_code in (2, 3, 6):
+                if obj_dedup not in seen_restored_objects and obj_dedup not in seen_active_objects:
+                    seen_restored_objects.add(obj_dedup)
+                    audit.restored_notices.append(vio)
+            else:
+                if obj_dedup not in seen_active_objects and obj_dedup not in seen_restored_objects:
+                    seen_active_objects.add(obj_dedup)
+                    audit.notice_violations.append(vio)
 
         # Scan TikTok Studio posts via pure HTTP (`/tiktok/creator/manage/item_list/v1/`)
         post_map: dict[str, PostPenalty] = {}
@@ -657,6 +745,24 @@ async def audit_account_restrictions(
 
         await asyncio.gather(*(_check_one(pp) for pp in post_map.values()))
         audit.post_penalties = list(post_map.values())
+        audit.total_views = sum(p.play_count for p in audit.post_penalties)
+
+        # Compute overall account health badge
+        has_actionable = any(v.can_appeal or v.status_code == 1 for v in audit.notice_violations) or any(
+            p.appeal_status == 0 or p.v2_can_appeal for p in audit.post_penalties
+        )
+        has_appealing = any(v.status_code == 4 for v in audit.notice_violations) or any(
+            p.appeal_status == 3 for p in audit.post_penalties
+        )
+        has_failed_active = any(v.status_code == 7 for v in audit.notice_violations)
+        if has_actionable or has_failed_active:
+            audit.account_health = "action_required"
+        elif has_appealing:
+            audit.account_health = "appealing"
+        else:
+            audit.account_health = "eligible"
+
+        _merge_refreshed_cookies(account, http.cookies)
 
     return audit
 
@@ -1327,4 +1433,33 @@ async def remove_account_restrictions(
                         )
                     )
 
+        _merge_refreshed_cookies(account, http.cookies)
+
     return summary
+
+
+async def set_post_visibility(account: AccountRecord, item_id: str, *, private: bool = True) -> tuple[bool, str]:
+    """Switch a TikTok Studio post to Private (`visibility_type=2`) or Public (`visibility_type=0`)."""
+    cookies = extract_cookie_dict(account)
+    headers = {
+        "user-agent": DESKTOP_CHROME_UA,
+        "accept": "application/json, text/plain, */*",
+    }
+    vis_type = 2 if private else 0
+    async with httpx.AsyncClient(
+        proxy=account.proxy,
+        cookies=cookies,
+        headers=headers,
+        timeout=20.0,
+        follow_redirects=True,
+    ) as http:
+        resp = await http.post(
+            f"{WWW_BASE}/tiktokstudio/api/web/item/visibility",
+            params={"aid": "1988"},
+            json={"item_id": item_id, "visibility_type": vis_type},
+        )
+        _merge_refreshed_cookies(account, http.cookies)
+        rj = resp.json()
+        if resp.status_code == 200 and rj.get("statusCode", rj.get("status_code", -1)) == 0:
+            return True, f"Пост {item_id} переведён в {'Private' if private else 'Public'}"
+        return False, f"Ответ visibility ({resp.status_code}): {resp.text[:160]}"

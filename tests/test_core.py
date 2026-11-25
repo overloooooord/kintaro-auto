@@ -413,3 +413,22 @@ async def test_full_pipeline_403_auth_warmup_upload_and_shadow_check(
     assert "/v1/feed/recommendations" in called_paths
     assert "/v1/post/view" in called_paths
     assert "/v1/post/create/video" in called_paths
+
+
+async def test_web_dashboard_index_and_state(tmp_path: Path) -> None:
+    from kintaro_auto.web import create_web_app
+
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text(
+        f'state_dir = "{tmp_path / "state"}"\n[api]\napi_key = "demo_key"\n',
+        encoding="utf-8",
+    )
+    web_app = create_web_app(cfg_file)
+    transport = httpx.ASGITransport(app=web_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        r_html = await c.get("/")
+        assert r_html.status_code == 200
+        assert "KINTARO // CONTROL & UNBAN CENTER" in r_html.text
+        r_st = await c.get("/api/state")
+        assert r_st.status_code == 200
+        assert "accounts" in r_st.json()

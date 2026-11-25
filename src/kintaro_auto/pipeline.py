@@ -192,13 +192,13 @@ class AutomationPipeline:
                     redirect_cc = self._extract_redirect_cluster(exc.payload, login_region)
                     if (
                         cluster_attempt == 0
-                        and account.totp_token
+                        and (account.totp_token or account.use_outlook_hub)
                         and redirect_cc
                         and redirect_cc != login_region
                     ):
                         logger.warning(
-                            "[%s] 403 suspicious_login показал домашний кластер `%s` (вместо `%s`). "
-                            "Перерегистрация под `%s` для входа чисто по TOTP без почты...",
+                            "[%s] 403 показал домашний кластер `%s` (вместо `%s`). "
+                            "Перерегистрация устройства под родной кластер `%s` против плашки смены региона...",
                             account.account_id,
                             redirect_cc,
                             login_region,

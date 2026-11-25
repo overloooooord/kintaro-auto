@@ -242,19 +242,25 @@ function renderFleet() {
 
     let statusBanner = '';
     if (aud) {
-      if ((aud.notice_violations || []).length) {
-        const v = aud.notice_violations[0];
-        statusBanner = `<div class="alert-strip ${v.can_appeal ? 'alert-err' : 'alert-warn'}">
+      const vios = aud.notice_violations || [];
+      if (vios.length) {
+        const appealableCnt = vios.filter(x => x.can_appeal || x.status_code === 1).length;
+        statusBanner = vios.slice(0, 4).map(v => `<div class="alert-strip ${v.can_appeal ? 'alert-err' : 'alert-warn'}">
           <div>
             <strong>${esc(v.title)}</strong> <span class="mono" style="opacity:.8">#${esc(v.punish_id)}</span><br/>
             <span>${esc(v.status_label)} · Source: <code class="mono">${esc(v.punish_source || '—')}</code> ${v.appeal_id && v.appeal_id !== '0' ? '· AppealId: ' + esc(v.appeal_id) : ''}</span>
           </div>
-          ${v.can_appeal ? `<button class="btn btn-sm btn-primary" onclick="appealAccount('${esc(a.account_id)}')">Снять</button>` : ''}
-        </div>`;
+          ${v.can_appeal ? `<button class="btn btn-sm btn-primary" onclick="appealAccount('${esc(a.account_id)}', false)">Снять (${appealableCnt})</button>` : ''}
+        </div>`).join('');
+        if (vios.length > 4) {
+          statusBanner += `<div class="alert-strip alert-warn" style="padding:6px 11px;font-size:11.5px;">
+            <span>+ ещё <strong>${vios.length - 4}</strong> ограничений в этом же аккаунте (всего ${vios.length}, кнопка «Снять» подаст на все сразу).</span>
+          </div>`;
+        }
       } else if ((aud.restored_notices || []).length) {
         const r0 = aud.restored_notices[0];
         statusBanner = `<div class="alert-strip alert-ok">
-          <span>✓ Огран снят: <strong>${esc(r0.title)}</strong> (${fmtTs(r0.create_time)})</span>
+          <span>✓ Огран снят (${aud.restored_notices.length}): <strong>${esc(r0.title)}</strong> (${fmtTs(r0.create_time)})</span>
         </div>`;
       }
       if (aud.region_warning_present) {
@@ -307,7 +313,8 @@ function renderFleet() {
         <div style="display:flex;gap:6px;flex-wrap:wrap;">
           ${!a.authenticated ? `<button class="btn btn-sm btn-primary" onclick="authAccount('${esc(a.account_id)}')">🔑 Войти</button>` : ''}
           ${a.authenticated ? `<button class="btn btn-sm" onclick="auditAccount('${esc(a.account_id)}')">↻ Аудит</button>` : ''}
-          ${a.authenticated ? `<button class="btn btn-sm btn-emerald" onclick="appealAccount('${esc(a.account_id)}')">⚡ Снять ограны</button>` : ''}
+          ${a.authenticated ? `<button class="btn btn-sm btn-emerald" onclick="appealAccount('${esc(a.account_id)}', false)">⚡ Снять ограны</button>` : ''}
+          ${a.authenticated ? `<button class="btn btn-sm" onclick="appealAccount('${esc(a.account_id)}', true)" title="Ждать все 0..10 огранов после залива и снять">⏳ Ждать волну</button>` : ''}
           ${a.authenticated ? `<button class="btn btn-sm" onclick="warmupAccount('${esc(a.account_id)}')">🔥 Прогрев</button>` : ''}
         </div>
         <span class="mono" style="font-size:11px;color:var(--muted);">${aud?.audited_at ? 'обновлено ' + aud.audited_at : ''}</span>
@@ -349,6 +356,7 @@ async function runBulk(action, extra = {}) {
       account_ids: ids,
       action,
       hide_rejected: document.getElementById('chkHideRejected').checked,
+      appeal_studio_posts: document.getElementById('chkIncludeStudio').checked,
       ...extra,
     });
     toast(`Пакетная задача «${action}» запущена (${ids.length} акк.)`, 'success');
@@ -393,7 +401,8 @@ function renderDrawer() {
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
       ${!a.authenticated ? `<button class="btn btn-sm btn-primary" onclick="authAccount('${esc(a.account_id)}')">🔑 Авторизоваться</button>` : ''}
       ${a.authenticated ? `<button class="btn btn-sm" onclick="auditAccount('${esc(a.account_id)}')">↻ Обновить аудит</button>` : ''}
-      ${a.authenticated ? `<button class="btn btn-sm btn-emerald" onclick="appealAccount('${esc(a.account_id)}')">⚡ Снять все ограны</button>` : ''}
+      ${a.authenticated ? `<button class="btn btn-sm btn-emerald" onclick="appealAccount('${esc(a.account_id)}', false)">⚡ Снять все ограны</button>` : ''}
+      ${a.authenticated ? `<button class="btn btn-sm" onclick="appealAccount('${esc(a.account_id)}', true)">⏳ Дождаться волны (0..10)</button>` : ''}
       ${a.authenticated ? `<button class="btn btn-sm" onclick="warmupAccount('${esc(a.account_id)}')">🔥 Прогреть ленту</button>` : ''}
       <button class="btn btn-sm" onclick="syncGeo('${esc(a.account_id)}','US')">🌎 Sync US SIM</button>
       ${a.use_outlook_hub ? `<button class="btn btn-sm btn-amber" onclick="fetchOutlookOtp('${esc(a.account_id)}')">📬 Прочитать Outlook OTP</button>` : ''}
@@ -476,17 +485,37 @@ async function auditAll() {
   try { await apiPost('/api/audit-all'); toast('HTTP-аудит всех аккаунтов завершён', 'success'); await fetchState(); }
   catch (e) { toast(e.message, 'err'); } finally { b.disabled = false; }
 }
-async function appealAll() {
-  const b = document.getElementById('btnAppealAll'); b.disabled = true;
-  try { await apiPost('/api/appeal-all', { hide_rejected: document.getElementById('chkHideRejected').checked }); toast('Массовое снятие огранов завершено', 'success'); await fetchState(); }
-  catch (e) { toast(e.message, 'err'); } finally { b.disabled = false; }
+async function appealAll(settle = false) {
+  const b = document.getElementById('btnAppealAll');
+  const bs = document.getElementById('btnSettleAll');
+  b.disabled = true; if (bs) bs.disabled = true;
+  if (settle) toast('Ожидание всей волны огранов (до 4 мин)...', 'info');
+  try {
+    await apiPost('/api/appeal-all', {
+      hide_rejected: document.getElementById('chkHideRejected').checked,
+      appeal_studio_posts: document.getElementById('chkIncludeStudio').checked,
+      settle,
+    });
+    toast('Снятие огранов завершено', 'success');
+    await fetchState();
+  }
+  catch (e) { toast(e.message, 'err'); } finally { b.disabled = false; if (bs) bs.disabled = false; }
 }
 async function auditAccount(aid) {
   try { await apiPost(`/api/accounts/${encodeURIComponent(aid)}/audit`); toast(`Аудит @${aid} обновлён`, 'success'); await fetchState(); }
   catch (e) { toast(e.message, 'err'); }
 }
-async function appealAccount(aid) {
-  try { await apiPost(`/api/accounts/${encodeURIComponent(aid)}/appeal`, { hide_rejected: document.getElementById('chkHideRejected').checked }); toast(`Проверка и снятие огранов @${aid} завершены`, 'success'); await fetchState(); }
+async function appealAccount(aid, settle = false) {
+  if (settle) toast(`@${aid}: ждём прихода всех 0..10 огранов волны...`, 'info');
+  try {
+    await apiPost(`/api/accounts/${encodeURIComponent(aid)}/appeal`, {
+      hide_rejected: document.getElementById('chkHideRejected').checked,
+      appeal_studio_posts: document.getElementById('chkIncludeStudio').checked,
+      settle,
+    });
+    toast(`Снятие огранов @${aid} завершено`, 'success');
+    await fetchState();
+  }
   catch (e) { toast(e.message, 'err'); }
 }
 async function authAccount(aid) {

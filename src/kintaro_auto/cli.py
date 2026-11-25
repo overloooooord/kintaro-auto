@@ -21,6 +21,7 @@ from kintaro_auto.appeals import (
     AccountAuditResult,
     audit_account_restrictions,
     remove_account_restrictions,
+    wait_and_appeal_settle,
 )
 from kintaro_auto.client import AuthChallengeRequiredError, KintaroClient
 from kintaro_auto.config import AppConfig, load_config
@@ -655,6 +656,10 @@ def appeal_restrictions(
         typer.Option("--reason", help="Текст обоснования апелляции"),
     ] = "Our content is original, authentic, and strictly follows all TikTok Community Guidelines.",
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Показать доступные апелляции без отправки POST")] = False,
+    include_studio: Annotated[bool, typer.Option("--include-studio", help="Также отправлять апелляции на посты в TikTok Studio (по умолчанию ВЫКЛ)")] = False,
+    settle: Annotated[bool, typer.Option("--settle", help="Ждать окончания волны уведомлений (0–10+ огранов после залива) и снять все")] = False,
+    quiet_seconds: Annotated[float, typer.Option("--quiet-sec", help="Секунд тишины без новых огранов для выхода из --settle")] = 60.0,
+    max_wait_seconds: Annotated[float, typer.Option("--max-wait-sec", help="Макс. время ожидания волны --settle (сек)")] = 240.0,
     hide_rejected: Annotated[bool, typer.Option("--hide-rejected", help="Переводить посты с отклонённой апелляцией (FAILED) в Private (защита от бана 2048)")] = False,
     loop: Annotated[bool, typer.Option("--loop", "--watch", help="Циклический мониторинг и авто-снятие флагов по кукам без повторных входов")] = False,
     cycles: Annotated[int, typer.Option("--cycles", help="Число циклов в режиме --loop/--watch (0 = бесконечно)")] = 0,
@@ -663,7 +668,7 @@ def appeal_restrictions(
     config: Annotated[Path | None, typer.Option("--config", "-c")] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
 ) -> None:
-    """3-канальное авто-снятие огранов (`commit_appeal` -> `aweme/v2` -> `BytedanceWebview` + Studio V1/V2) и скрытие FAILED постов."""
+    """Снять ВСЕ ограны `Account updates` (`group=47/661`); посты в Studio не апилятся без `--include-studio`."""
     _setup_logging(verbose)
     _, store = _init_env(config)
 
@@ -678,7 +683,7 @@ def appeal_restrictions(
             return
 
         json_out = []
-        table = Table(title="Снятие огранов (Mobile IDC + WebView TNS + TikTok Studio)")
+        table = Table(title="Снятие огранов (Account Updates group=47/661)")
         table.add_column("Account", style="bold cyan")
         table.add_column("Уровень")
         table.add_column("Target / Aweme ID")
@@ -689,12 +694,24 @@ def appeal_restrictions(
 
         for acc in targets:
             try:
-                summary = await remove_account_restrictions(
-                    acc,
-                    appeal_text=appeal_text,
-                    dry_run=dry_run,
-                    hide_rejected=hide_rejected,
-                )
+                if settle and not dry_run:
+                    summary = await wait_and_appeal_settle(
+                        acc,
+                        appeal_text=appeal_text,
+                        appeal_studio_posts=include_studio,
+                        hide_rejected=hide_rejected,
+                        quiet_seconds=quiet_seconds,
+                        max_wait_seconds=max_wait_seconds,
+                    )
+                else:
+                    summary = await remove_account_restrictions(
+                        acc,
+                        appeal_text=appeal_text,
+                        dry_run=dry_run,
+                        appeal_studio_posts=include_studio,
+                        hide_rejected=hide_rejected,
+                    )
+                store.save_account(acc)
             except Exception as exc:
                 console.print(f"[red]✗ \\[{acc.account_id}] Ошибка модуля апелляций: {exc}[/red]")
                 continue
@@ -769,6 +786,8 @@ def unban_one_or_file(
         typer.Option("--reason", help="Текст обоснования апелляции"),
     ] = "Our content is original, authentic, and strictly follows all TikTok Community Guidelines.",
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Только аудит без отправки POST апелляций")] = False,
+    include_studio: Annotated[bool, typer.Option("--include-studio", help="Также апилить посты в Studio (по умолчанию ВЫКЛ)")] = False,
+    settle: Annotated[bool, typer.Option("--settle", help="Ждать окончания волны уведомлений после залива (до 240с)")] = False,
     hide_rejected: Annotated[bool, typer.Option("--hide-rejected", help="Переводить отклонённые (FAILED) посты в Private")] = False,
     config: Annotated[Path | None, typer.Option("--config", "-c")] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
@@ -839,12 +858,22 @@ def unban_one_or_file(
                     continue
 
                 try:
-                    summary = await remove_account_restrictions(
-                        acc,
-                        appeal_text=appeal_text,
-                        dry_run=dry_run,
-                        hide_rejected=hide_rejected,
-                    )
+                    if settle and not dry_run:
+                        summary = await wait_and_appeal_settle(
+                            acc,
+                            appeal_text=appeal_text,
+                            appeal_studio_posts=include_studio,
+                            hide_rejected=hide_rejected,
+                        )
+                    else:
+                        summary = await remove_account_restrictions(
+                            acc,
+                            appeal_text=appeal_text,
+                            dry_run=dry_run,
+                            appeal_studio_posts=include_studio,
+                            hide_rejected=hide_rejected,
+                        )
+                    store.save_account(acc)
                     if summary.audit:
                         _print_rich_audit(summary.audit)
                 except Exception as exc:

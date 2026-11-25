@@ -458,3 +458,85 @@ async def test_web_dashboard_index_and_state(tmp_path: Path) -> None:
         r_cfg = await c.get("/api/config")
         assert r_cfg.status_code == 200
         assert r_cfg.json()["has_api_key"] is True
+
+
+async def test_ten_account_bans_not_collapsed_and_studio_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    from kintaro_auto.appeals import audit_account_restrictions, remove_account_restrictions
+
+    notices_10 = [
+        {
+            "nid_str": f"n{i}",
+            "create_time": 1795642000 + i,
+            "template_notice": {
+                "notice": {"title": {"title": "Account ineligible for recommendation"}},
+                "schema_url": (
+                    f"https://www.tiktok.com/violation-appeal?object_id=7071348182533866497"
+                    f"&object_type=4&punish_id=77122241666736688{i:02d}&punish_type=2048"
+                ),
+            },
+        }
+        for i in range(10)
+    ]
+    submitted_studio: list[str] = []
+    submitted_notices: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        p = req.url.path
+        if p == "/cdn-cgi/trace":
+            return httpx.Response(200, text="ip=1.2.3.4\nloc=VN\n")
+        if p == "/tiktokstudio/api/web/user":
+            return httpx.Response(
+                200,
+                json={"userId": "7071348182533866497", "userBaseInfo": {"UserProfile": {"UserBase": {"UniqId": "demo10", "Region": {"Region": "US", "RegistrationCountry": "id"}}}}},
+            )
+        if p == "/aweme/v1/notice/count/":
+            return httpx.Response(200, json={"groups_in_filters": [{"filter_type": 51, "groups": [47]}]})
+        if p == "/aweme/v1/notice/multi/":
+            return httpx.Response(200, json={"notice_lists": [{"group": 47, "notice_list": notices_10}]})
+        if p == "/api/violation/v1/get_violation_detail":
+            vid = req.url.params.get("ViolationId", "")
+            status = 4 if vid in submitted_notices else 1
+            return httpx.Response(
+                200,
+                json={"BaseResp": {"StatusCode": 0}, "CanAppeal": status == 1, "ViolationInfo": {"Status": status}},
+            )
+        if p == "/tiktok/creator/manage/item_list/v1/":
+            return httpx.Response(200, json={"item_list": [{"item_id": "999000111", "create_time": 1795642000, "desc": "clip", "play_count": 0}]})
+        if p == "/mod/v1/getPenaltyDetails/":
+            return httpx.Response(200, json={"appeal_status": 0, "penalties": [{"issuer": 1, "penalty_id": {"id": 55}}]})
+        if p == "/api/moderation/penalties/gettransparencypagecontent":
+            return httpx.Response(200, json={"showAppealBtn": True, "appealDetails": [{"x": 1}]})
+        if p == "/tiktok/v1/appeal/reason/":
+            return httpx.Response(200, json={"appeal_reasons": [{"code": 1}]})
+        if p == "/api/violation/v1/commit_appeal":
+            body = json.loads(req.content.decode())
+            submitted_notices.append(body["ViolationId"])
+            return httpx.Response(200, json={"BaseResp": {"StatusCode": 0}})
+        if p in ("/mod/v1/submitAppeals", "/api/moderation/penalties/submitappeal"):
+            submitted_studio.append(p)
+            return httpx.Response(200, json={"status_code": 0})
+        return httpx.Response(200, json={})
+
+    orig_client = httpx.AsyncClient
+
+    def patched_client(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
+        kwargs.pop("proxy", None)
+        kwargs["transport"] = httpx.MockTransport(handler)
+        return orig_client(*args, **kwargs)
+
+    monkeypatch.setattr("kintaro_auto.appeals.httpx.AsyncClient", patched_client)
+
+    acc = AccountRecord(
+        account_id="demo10",
+        proxy="socks5://u:p@127.0.0.1:1080",
+        region="US",
+        device={"cookies": {"sessionid": "s1", "store-idc": "alisg"}},
+    )
+    aud = await audit_account_restrictions(acc)
+    assert len(aud.notice_violations) == 10
+    assert aud.post_penalties[0].appeal_status == 0
+
+    summary = await remove_account_restrictions(acc, stagger_appeals=False)
+    assert summary.notice_appeals_verified == 10
+    assert summary.post_appeals_verified == 0
+    assert submitted_studio == []

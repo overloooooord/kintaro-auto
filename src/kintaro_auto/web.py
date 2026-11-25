@@ -25,6 +25,7 @@ from kintaro_auto.appeals import (
     probe_proxy_geo,
     remove_account_restrictions,
     set_post_visibility,
+    wait_and_appeal_settle,
 )
 from kintaro_auto.captions import prepare_description_and_mentions
 from kintaro_auto.client import KintaroClient
@@ -333,6 +334,10 @@ class FolderImportRequest(BaseModel):
 class AppealRequest(BaseModel):
     reason: str = "Our content is original, authentic, and strictly follows all TikTok Community Guidelines."
     dry_run: bool = False
+    appeal_studio_posts: bool = False
+    settle: bool = False
+    quiet_seconds: float = 60.0
+    max_wait_seconds: float = 240.0
     hide_rejected: bool = True
 
 
@@ -359,6 +364,7 @@ class BulkActionRequest(BaseModel):
     action: str  # audit | appeal | warmup | sync_geo | set_proxy | delete
     region: str = "US"
     proxy: str = ""
+    appeal_studio_posts: bool = False
     hide_rejected: bool = True
     reason: str = "Our content is original, authentic, and strictly follows all TikTok Community Guidelines."
 
@@ -500,16 +506,34 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
 
     @app.post("/api/accounts/{account_id}/appeal")
     async def appeal_one(account_id: str, req: AppealRequest) -> dict[str, Any]:
-        jid = hub.start_job(f"Снятие огранов @{account_id}", total=1)
+        jid = hub.start_job(
+            f"{'Ожидание волны (0..10+) и снятие' if req.settle else 'Снятие огранов'} @{account_id}",
+            total=1,
+        )
         try:
             acc = hub.store.load_account(account_id)
-            hub.push_event(f"[{account_id}] Запуск 3-канального снятия огранов...", "info")
-            summary = await remove_account_restrictions(
-                acc,
-                appeal_text=req.reason,
-                dry_run=req.dry_run,
-                hide_rejected=req.hide_rejected,
+            hub.push_event(
+                f"[{account_id}] Запуск снятия огранов Account updates"
+                + (" (режим ожидания всей волны до 240с)..." if req.settle else "..."),
+                "info",
             )
+            if req.settle and not req.dry_run:
+                summary = await wait_and_appeal_settle(
+                    acc,
+                    appeal_text=req.reason,
+                    appeal_studio_posts=req.appeal_studio_posts,
+                    hide_rejected=req.hide_rejected,
+                    quiet_seconds=req.quiet_seconds,
+                    max_wait_seconds=req.max_wait_seconds,
+                )
+            else:
+                summary = await remove_account_restrictions(
+                    acc,
+                    appeal_text=req.reason,
+                    dry_run=req.dry_run,
+                    appeal_studio_posts=req.appeal_studio_posts,
+                    hide_rejected=req.hide_rejected,
+                )
             hub.store.save_account(acc)
             if summary.audit:
                 ad = asdict(summary.audit)
@@ -517,8 +541,8 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
                 hub.audit_cache[account_id] = ad
                 hub._save_audit_cache()
             hub.push_event(
-                f"[{account_id}] Готово: апелляций аккаунта={summary.notice_appeals_verified}, "
-                f"постов={summary.post_appeals_verified}, скрыто в Private={summary.posts_hidden}",
+                f"[{account_id}] Готово: снято в Account updates={summary.notice_appeals_verified}, "
+                f"постов Studio={summary.post_appeals_verified}, скрыто в Private={summary.posts_hidden}",
                 "success",
                 kind="audit_updated",
             )
@@ -537,12 +561,23 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
         try:
             for acc in targets:
                 try:
-                    s = await remove_account_restrictions(
-                        acc,
-                        appeal_text=req.reason,
-                        dry_run=req.dry_run,
-                        hide_rejected=req.hide_rejected,
-                    )
+                    if req.settle and not req.dry_run:
+                        s = await wait_and_appeal_settle(
+                            acc,
+                            appeal_text=req.reason,
+                            appeal_studio_posts=req.appeal_studio_posts,
+                            hide_rejected=req.hide_rejected,
+                            quiet_seconds=req.quiet_seconds,
+                            max_wait_seconds=req.max_wait_seconds,
+                        )
+                    else:
+                        s = await remove_account_restrictions(
+                            acc,
+                            appeal_text=req.reason,
+                            dry_run=req.dry_run,
+                            appeal_studio_posts=req.appeal_studio_posts,
+                            hide_rejected=req.hide_rejected,
+                        )
                     hub.store.save_account(acc)
                     if s.audit:
                         ad = asdict(s.audit)
@@ -619,7 +654,10 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
                         try:
                             acc = hub.store.load_account(aid)
                             s = await remove_account_restrictions(
-                                acc, appeal_text=req.reason, hide_rejected=req.hide_rejected
+                                acc,
+                                appeal_text=req.reason,
+                                appeal_studio_posts=req.appeal_studio_posts,
+                                hide_rejected=req.hide_rejected,
                             )
                             hub.store.save_account(acc)
                             if s.audit:

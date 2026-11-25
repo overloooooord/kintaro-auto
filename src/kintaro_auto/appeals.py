@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import random
+import time
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse, urlsplit
@@ -49,7 +50,7 @@ FALLBACK_GATEWAYS = (
 
 WWW_BASE = "https://www.tiktok.com"
 
-CORE_SYSTEM_NOTICE_GROUPS = (47, 46, 84, 210, 214, 69, 13, 226, 227, 228, 229, 661, 702)
+CORE_SYSTEM_NOTICE_GROUPS = (47, 661)
 
 VIOLATION_V1_STATUS: dict[int, str] = {
     1: "Effecting (Active / Appealable)",
@@ -537,7 +538,7 @@ async def audit_account_restrictions(
             proxy_country=proxy_cc,
         )
 
-        # Discover active system notice groups
+        # Discover Account Updates notice groups only (`filter_type` 33 & 51 + 47/661) to avoid unrelated tabs
         groups: set[int] = set(CORE_SYSTEM_NOTICE_GROUPS)
         try:
             r_cnt = await http.get(
@@ -546,7 +547,7 @@ async def audit_account_restrictions(
             )
             if r_cnt.status_code == 200:
                 for flt in r_cnt.json().get("groups_in_filters") or []:
-                    if flt.get("filter_type") in (33, 41, 6, 14):
+                    if flt.get("filter_type") in (33, 51):
                         for g in flt.get("groups") or []:
                             groups.add(int(g))
         except Exception:
@@ -557,7 +558,7 @@ async def audit_account_restrictions(
         for i in range(0, len(sorted_groups), 20):
             chunk = sorted_groups[i : i + 20]
             group_list = json.dumps(
-                [{"count": 25, "group": g, "is_mark_read": 0, "max_time": 0, "min_time": 0} for g in chunk],
+                [{"count": 50, "group": g, "is_mark_read": 0, "max_time": 0, "min_time": 0} for g in chunk],
                 separators=(",", ":"),
             )
             try:
@@ -583,9 +584,11 @@ async def audit_account_restrictions(
             reverse=True,
         )
 
+        # Deduplicate strictly by `punish_id` (NOT object_id), so a batch of 10+ account bans
+        # sharing `object_id=<uid>` is preserved in full without dropping bans #2..#10.
+        parsed_candidates: list[NoticeViolation] = []
         seen_punish_ids: set[str] = set()
-        seen_active_objects: set[str] = set()
-        seen_restored_objects: set[str] = set()
+        resolved_punish_ids: set[str] = set()
 
         for g_id, item in raw_notices:
             nid = str(item.get("nid_str") or item.get("nid") or "")
@@ -649,16 +652,15 @@ async def audit_account_restrictions(
 
             if not punish_id or not object_id:
                 continue
+            if "eligible" in low_title and "ineligible" not in low_title:
+                resolved_punish_ids.add(punish_id)
             if punish_id in seen_punish_ids:
                 continue
-            # Inspect up to top 6 distinct punish_ids so an older restored notice never hides a newer active one
-            if len(seen_punish_ids) >= 6:
+            if len(seen_punish_ids) >= 50:
                 continue
             seen_punish_ids.add(punish_id)
 
             effective_obj_type = object_type or ("4" if object_id == uid else "1")
-            obj_dedup = f"{effective_obj_type}:{object_id}"
-
             try:
                 punish_type = int(punish_type_str)
             except ValueError:
@@ -677,23 +679,35 @@ async def audit_account_restrictions(
                 schema_url=falcon_url or raw_schema,
                 web_schema_url=web_schema,
             )
+            parsed_candidates.append(vio)
 
-            if "eligible" in low_title and "ineligible" not in low_title:
+        # Mark already-resolved punish_ids without extra roundtrips; enrich others concurrently
+        to_enrich: list[NoticeViolation] = []
+        for vio in parsed_candidates:
+            if vio.punish_id in resolved_punish_ids or (
+                "eligible" in vio.title.lower() and "ineligible" not in vio.title.lower()
+            ):
                 vio.can_appeal = False
                 vio.status_code = 6
                 vio.status_label = VIOLATION_V1_STATUS[6]
+                audit.restored_notices.append(vio)
             else:
-                await _enrich_violation_detail(http, idc_gw, vio, uid)
+                to_enrich.append(vio)
 
-            # Separate active/in-review restrictions from restored/expired history!
+        detail_sem = asyncio.Semaphore(8)
+
+        async def _enrich_one(v_obj: NoticeViolation) -> None:
+            async with detail_sem:
+                await _enrich_violation_detail(http, idc_gw, v_obj, uid)
+
+        if to_enrich:
+            await asyncio.gather(*(_enrich_one(v) for v in to_enrich))
+
+        for vio in to_enrich:
             if vio.status_code in (2, 3, 6):
-                if obj_dedup not in seen_restored_objects and obj_dedup not in seen_active_objects:
-                    seen_restored_objects.add(obj_dedup)
-                    audit.restored_notices.append(vio)
+                audit.restored_notices.append(vio)
             else:
-                if obj_dedup not in seen_active_objects and obj_dedup not in seen_restored_objects:
-                    seen_active_objects.add(obj_dedup)
-                    audit.notice_violations.append(vio)
+                audit.notice_violations.append(vio)
 
         # Scan TikTok Studio posts via pure HTTP (`/tiktok/creator/manage/item_list/v1/`)
         post_map: dict[str, PostPenalty] = {}
@@ -1043,18 +1057,20 @@ async def remove_account_restrictions(
     post_ids: list[str] | None = None,
     appeal_text: str = "Our content is original, authentic, and strictly follows all TikTok Community Guidelines.",
     dry_run: bool = False,
+    appeal_studio_posts: bool = False,
     hide_rejected: bool = False,
     stagger_appeals: bool = True,
     chrome_executable: str | None = None,
 ) -> AccountAppealSummary:
     """
-    Full multi-channel restriction scanner, appealer & rejected-post cleaner (unified 12 + 233):
+    Multi-channel restriction scanner & appealer:
     1. Pure-HTTP Mobile IDC & Studio audit (`audit_account_restrictions`).
-    2. Notice/Account appeals: `commit_appeal` -> `aweme/v2/appeal/commit/` -> Headless Chrome `BytedanceWebview` `tns-api`,
+    2. Account Updates (`group=47/661`) appeals across ALL distinct `punish_id`s:
+       `commit_appeal` -> `aweme/v2/appeal/commit/` -> Headless Chrome `BytedanceWebview` `tns-api`,
        verified via `get_violation_detail`.
-    3. Studio Post appeals: HTTP V2/V1 -> Headless Chrome Studio fallback, verified via `getPenaltyDetails`.
-    4. Optional `--hide-rejected`: switches `FAILED` (`appeal_status == 5`) posts to Private (`visibility_type=2`)
-       to prevent 30-day `punish_type=2048` account recommendation bans.
+    3. Studio Post appeals are OFF by default (`appeal_studio_posts=False`) per workflow;
+       enable explicitly if needed.
+    4. Optional `--hide-rejected`: switches `FAILED` (`appeal_status == 5`) posts to Private (`visibility_type=2`).
     """
     logger.info("[%s] Запуск HTTP-аудита системных уведомлений (IDC) и постов Studio...", account.account_id)
     audit = await audit_account_restrictions(account, extra_post_ids=post_ids)
@@ -1254,9 +1270,11 @@ async def remove_account_restrictions(
                 )
             )
 
-        # B. Process TikTok Studio Per-Post FYP Restrictions
+        # B. Process TikTok Studio Per-Post FYP Restrictions ONLY if explicitly enabled (`appeal_studio_posts=True`)
         for pp in audit.post_penalties:
             can_submit_post = pp.appeal_status == 0 or pp.v2_can_appeal
+            if can_submit_post and not appeal_studio_posts:
+                continue
             if can_submit_post:
                 reasons_str = ",".join(pp.reason_labels) or ("V2" if pp.v2_can_appeal else "FYP_INELIGIBLE")
                 if dry_run:
@@ -1436,6 +1454,84 @@ async def remove_account_restrictions(
         _merge_refreshed_cookies(account, http.cookies)
 
     return summary
+
+
+async def wait_and_appeal_settle(
+    account: AccountRecord,
+    *,
+    appeal_text: str = "Our content is original, authentic, and strictly follows all TikTok Community Guidelines.",
+    appeal_studio_posts: bool = False,
+    hide_rejected: bool = False,
+    quiet_seconds: float = 60.0,
+    max_wait_seconds: float = 240.0,
+    poll_interval_seconds: float = 14.0,
+) -> AccountAppealSummary:
+    """
+    Polls Account Updates (`group=47/661`) repeatedly after an upload wave so trickle restrictions
+    (0, 2, or up to 10+ notices arriving asynchronously over 1–3 minutes) are ALL caught and appealed.
+    Stops once `quiet_seconds` pass with zero newly arrived appealable `punish_id`s or `max_wait_seconds` elapses.
+    """
+    start_ts = time.monotonic()
+    last_activity_ts = start_ts
+    seen_appealable_ids: set[str] = set()
+    all_reports: dict[str, RestrictionActionReport] = {}
+    last_audit: AccountAuditResult | None = None
+    total_notice_verified = 0
+    total_post_verified = 0
+    total_hidden = 0
+
+    while True:
+        s = await remove_account_restrictions(
+            account,
+            appeal_text=appeal_text,
+            appeal_studio_posts=appeal_studio_posts,
+            hide_rejected=hide_rejected,
+            stagger_appeals=True,
+        )
+        if s.audit:
+            last_audit = s.audit
+        new_in_wave = False
+        if s.audit:
+            for v in s.audit.notice_violations:
+                if (v.can_appeal or v.status_code == 1) and v.punish_id not in seen_appealable_ids:
+                    seen_appealable_ids.add(v.punish_id)
+                    new_in_wave = True
+        if s.notice_appeals_verified or s.post_appeals_verified:
+            new_in_wave = True
+            total_notice_verified += s.notice_appeals_verified
+            total_post_verified += s.post_appeals_verified
+        total_hidden += s.posts_hidden
+        for rep in s.items:
+            key = f"{rep.scope}:{rep.punish_key or rep.target_id}"
+            all_reports[key] = rep
+
+        now_ts = time.monotonic()
+        if new_in_wave:
+            last_activity_ts = now_ts
+        elapsed = now_ts - start_ts
+        idle = now_ts - last_activity_ts
+
+        if elapsed >= max_wait_seconds or (idle >= quiet_seconds and elapsed >= quiet_seconds):
+            break
+        logger.info(
+            "[%s] Ожидание волны огранов: подано=%d, тишина=%.0f/%.0fс (прошло %.0f/%.0fс)...",
+            account.account_id,
+            total_notice_verified,
+            idle,
+            quiet_seconds,
+            elapsed,
+            max_wait_seconds,
+        )
+        await asyncio.sleep(poll_interval_seconds)
+
+    return AccountAppealSummary(
+        account_id=account.account_id,
+        items=list(all_reports.values()),
+        audit=last_audit,
+        notice_appeals_verified=total_notice_verified,
+        post_appeals_verified=total_post_verified,
+        posts_hidden=total_hidden,
+    )
 
 
 async def set_post_visibility(account: AccountRecord, item_id: str, *, private: bool = True) -> tuple[bool, str]:

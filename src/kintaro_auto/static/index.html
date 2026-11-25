@@ -79,12 +79,17 @@
         </div>
       </div>
       <div class="top-right">
+        <label style="font-size:12px;color:var(--text-dim);display:flex;align-items:center;gap:6px;cursor:pointer;" title="По умолчанию апилятся только Account Updates (group=47/661), без постов в Studio">
+          <input type="checkbox" id="chkIncludeStudio" class="chk" />
+          <span>Также посты Studio</span>
+        </label>
         <label style="font-size:12px;color:var(--text-dim);display:flex;align-items:center;gap:6px;cursor:pointer;">
           <input type="checkbox" id="chkHideRejected" checked class="chk" />
-          <span>FAILED посты → Private</span>
+          <span>FAILED → Private</span>
         </label>
-        <button class="btn" id="btnAuditAll" onclick="auditAll()">↻ HTTP-аудит всех (0$)</button>
-        <button class="btn btn-primary" id="btnAppealAll" onclick="appealAll()">⚡ Снять все ограны</button>
+        <button class="btn" id="btnAuditAll" onclick="auditAll()">↻ HTTP-аудит (0$)</button>
+        <button class="btn btn-emerald" id="btnSettleAll" onclick="appealAll(true)" title="Ждёт до 4 мин пока прилетят все 0..10 огранов волны и снимает каждый">⏳ Дождаться волны (0..10)</button>
+        <button class="btn btn-primary" id="btnAppealAll" onclick="appealAll(false)">⚡ Снять все ограны</button>
       </div>
     </header>
 

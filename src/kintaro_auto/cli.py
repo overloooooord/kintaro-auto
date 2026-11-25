@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import random
 import uuid
+from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
 
@@ -11,7 +15,13 @@ from rich.console import Console
 from rich.logging import RichHandler
 from rich.table import Table
 
-from kintaro_auto.appeals import remove_account_restrictions
+from kintaro_auto.appeals import (
+    PUNISH_TYPE_NAMES,
+    WATCH_POLL_SECONDS,
+    AccountAuditResult,
+    audit_account_restrictions,
+    remove_account_restrictions,
+)
 from kintaro_auto.client import AuthChallengeRequiredError, KintaroClient
 from kintaro_auto.config import AppConfig, load_config
 from kintaro_auto.models import AccountRecord, UploadTask, apply_device_geo_profile
@@ -123,23 +133,23 @@ def import_lines(
 
 @app.command("import-sessions")
 def import_sessions(
-    sessions_dir: Annotated[Path, typer.Argument(help="Папка sessions/ из kintaro_auth")],
+    sessions_dir: Annotated[Path, typer.Argument(help="Папка sessions/ из kintaro_auth или из 233 (sessions/<user>/cookies.json)")],
     target_region: Annotated[str, typer.Option("--region", "-r", help="Целевой регион залива (например US)")] = "US",
-    proxy_override: Annotated[str | None, typer.Option("--proxy", "-p", help="Прокси (если нужно заменить прокси из файла сессии)")] = None,
+    proxy_override: Annotated[str | None, typer.Option("--proxy", "-p", help="Прокси (обязателен для cookies.json без прокси)")] = None,
     config: Annotated[Path | None, typer.Option("--config", "-c")] = None,
 ) -> None:
-    """Импортировать готовые авторизованные сессии `sessions/*.json` из `kintaro_auth`."""
-    import json
-
+    """Импортировать готовые сессии (`kintaro_auth/sessions/*.json` ИЛИ `233/sessions/<user>/cookies.json`)."""
     _, store = _init_env(config)
     count = 0
+    reg = target_region.strip().upper()
+
+    # 1. Kintaro JSON sessions (`sessions/*.json`)
     for fp in sorted(sessions_dir.glob("*.json")):
         raw = json.loads(fp.read_text(encoding="utf-8"))
         dev = raw.get("device") or (json.loads(raw["x_device"]) if raw.get("x_device") else None)
         if not dev:
             continue
         uname = raw.get("username") or fp.stem
-        reg = target_region.strip().upper()
         dev = apply_device_geo_profile(dev, reg)
         acc = AccountRecord(
             account_id=uname,
@@ -162,7 +172,54 @@ def import_sessions(
             acc.last_warmup_at = old.last_warmup_at
         store.save_account(acc)
         count += 1
-        console.print(f"  • [green]✓ {uname}[/green] (uid={raw.get('uid')}, target_region={reg})")
+        console.print(f"  • [green]✓ {uname}[/green] (kintaro x-device, target_region={reg})")
+
+    # 2. Restriction-Manager cookie folders (`sessions/<username>/cookies.json`)
+    for cfile in sorted(sessions_dir.glob("*/cookies.json")):
+        cks = json.loads(cfile.read_text(encoding="utf-8"))
+        if not isinstance(cks, dict) or not (cks.get("sessionid") or cks.get("sid_tt")):
+            continue
+        uname = cfile.parent.name
+        existing_path = store.account_path(uname)
+        if existing_path.exists():
+            old = store.load_account(uname)
+            px = proxy_override or old.proxy
+            if old.device and isinstance(old.device, dict):
+                merged_dev = dict(old.device)
+                merged_cks = dict(merged_dev.get("cookies") or {})
+                merged_cks.update(cks)
+                merged_dev["cookies"] = merged_cks
+            else:
+                merged_dev = {"cookies": cks}
+            old.proxy = px
+            old.device = merged_dev
+            old.authenticated = True
+            store.save_account(old)
+            count += 1
+            console.print(f"  • [green]✓ {uname}[/green] (обновлены cookies.json поверх существующего аккаунта)")
+        else:
+            if not proxy_override:
+                existing_any = store.list_accounts()
+                px = existing_any[0].proxy if existing_any else ""
+            else:
+                px = proxy_override
+            if not px:
+                console.print(f"  • [yellow]Пропущен {uname}: передай `-p socks5://...` для новой cookie-сессии[/yellow]")
+                continue
+            acc = AccountRecord(
+                account_id=uname,
+                proxy=px,
+                region=reg,
+                auth_region="DE",
+                auth_method="device_only",
+                username=uname,
+                device={"cookies": cks},
+                authenticated=True,
+            )
+            store.save_account(acc)
+            count += 1
+            console.print(f"  • [green]✓ {uname}[/green] (импортирован cookies.json, target_region={reg})")
+
     console.print(f"[bold green]Импортировано готовых сессий: {count}[/bold green]")
 
 
@@ -491,26 +548,115 @@ def check_shadows(
     console.print(table)
 
 
+def _fmt_unix_ts(ts: int) -> str:
+    if not ts:
+        return "—"
+    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _print_rich_audit(audit: AccountAuditResult) -> None:
+    console.print(
+        f"\n[bold cyan]━━━ @{audit.username} (UID: {audit.uid or '?'}) ━━━[/bold cyan] "
+        f"RegCountry=[bold]{audit.reg_country or '?'}[/bold] | "
+        f"CurrentRegion=[bold]{audit.current_region or '?'}[/bold] | "
+        f"IDC=[dim]{audit.idc_gateway}[/dim]"
+    )
+    if audit.region_warning_present:
+        console.print(
+            "  [bold red][!] В системных уведомлениях висит 'Update your account region' — "
+            "на аккаунт заходили с чужого GEO IP![/bold red]"
+        )
+    if audit.recent_device_logins:
+        console.print("  [yellow]Последние входы в системных уведомлениях:[/yellow]")
+        for lg in audit.recent_device_logins[:3]:
+            console.print(f"    • {lg}")
+
+    console.print(
+        f"  [bold][1] Системные уведомления / Account updates (group=47/661):[/bold] {len(audit.notice_violations)}"
+    )
+    if not audit.notice_violations:
+        console.print("    [green]Чисто — активных карточек нарушений не найдено.[/green]")
+    for v in audit.notice_violations:
+        ptype = PUNISH_TYPE_NAMES.get(v.punish_type, f"Type({v.punish_type})")
+        console.print(
+            f"    • [{_fmt_unix_ts(v.create_time)}] [bold]{v.title}[/bold] | punish_id={v.punish_id} | {ptype}\n"
+            f"      Статус: [cyan]{v.status_label}[/cyan] | CanAppeal={v.can_appeal} | "
+            f"Source={v.punish_source or '—'} | До={_fmt_unix_ts(v.punish_end_time)}"
+            + (f" | AppealId={v.appeal_id}" if v.appeal_id and v.appeal_id != "0" else "")
+            + (f" | Причина={v.reason_title}" if v.reason_title else "")
+        )
+
+    flagged = [p for p in audit.post_penalties if p.appeal_status != 2 or p.v2_can_appeal]
+    console.print(
+        f"  [bold][2] Посты в TikTok Studio:[/bold] всего {audit.total_posts}, с флагами FYP/модерации: {len(flagged)}"
+    )
+    for p in audit.post_penalties[:10]:
+        tag = (
+            f"[yellow][{p.appeal_status_label} | {','.join(p.reason_labels) or 'V2'}][/yellow]"
+            if (p.appeal_status != 2 or p.v2_can_appeal)
+            else "[green][OK][/green]"
+        )
+        short_desc = (p.desc[:42] + "...") if len(p.desc) > 45 else (p.desc or "<без описания>")
+        console.print(
+            f"    • {p.item_id} | {_fmt_unix_ts(p.create_time)} | views={p.play_count:<5d} | {short_desc} {tag}"
+        )
+
+
+@app.command("audit")
+def audit_command(
+    account_id: Annotated[str | None, typer.Option("--account", "-a", help="Конкретный account_id (по умолчанию все авторизованные)")] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Вывести результат строго в JSON")] = False,
+    config: Annotated[Path | None, typer.Option("--config", "-c")] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Мгновенный HTTP-аудит (0$ Kintaro, без браузера): регион, `bric_social`, `group=47/661`, статус апелляций и флаги постов в Studio."""
+    _setup_logging(verbose)
+    _, store = _init_env(config)
+    targets = (
+        [store.load_account(account_id)]
+        if account_id
+        else [a for a in store.list_accounts() if a.authenticated and a.device]
+    )
+    if not targets:
+        raise typer.BadParameter("Нет авторизованных аккаунтов для аудита.")
+
+    async def _run() -> None:
+        results = []
+        for acc in targets:
+            try:
+                aud = await audit_account_restrictions(acc)
+                results.append(asdict(aud))
+                if not as_json:
+                    _print_rich_audit(aud)
+            except Exception as exc:
+                console.print(f"[red]✗ \\[{acc.account_id}] Ошибка аудита: {exc}[/red]")
+        if as_json and results:
+            print(json.dumps(results if len(results) > 1 else results[0], indent=2, ensure_ascii=False))
+
+    asyncio.run(_run())
+
+
 @app.command("appeal")
 def appeal_restrictions(
     account_id: Annotated[str | None, typer.Option("--account", "-a", help="Конкретный account_id (по умолчанию все авторизованные)")] = None,
     appeal_text: Annotated[
         str,
-        typer.Option(
-            "--reason",
-            help="Текст обоснования апелляции (для форм с полем описания)",
-        ),
+        typer.Option("--reason", help="Текст обоснования апелляции"),
     ] = "Our content is original, authentic, and strictly follows all TikTok Community Guidelines.",
-    loop: Annotated[bool, typer.Option("--loop", help="Крутить проверку и авто-снятие огранов в бесконечном цикле")] = False,
-    interval_minutes: Annotated[float, typer.Option("--interval-min", help="Пауза между проходами в режиме --loop (мин)")] = 15.0,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Показать доступные апелляции без отправки POST")] = False,
+    hide_rejected: Annotated[bool, typer.Option("--hide-rejected", help="Переводить посты с отклонённой апелляцией (FAILED) в Private (защита от бана 2048)")] = False,
+    loop: Annotated[bool, typer.Option("--loop", "--watch", help="Циклический мониторинг и авто-снятие флагов по кукам без повторных входов")] = False,
+    cycles: Annotated[int, typer.Option("--cycles", help="Число циклов в режиме --loop/--watch (0 = бесконечно)")] = 0,
+    interval_minutes: Annotated[float | None, typer.Option("--interval-min", help="Фикс. пауза в минутах (если не задана — анти-фрод рандом 95–165 сек)")] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Вывести результат в JSON")] = False,
     config: Annotated[Path | None, typer.Option("--config", "-c")] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
 ) -> None:
-    """Автоматически найти и подать апелляции на все ограны аккаунта (`Account ineligible for recommendation`) и постов (`For You feed`)."""
+    """3-канальное авто-снятие огранов (`commit_appeal` -> `aweme/v2` -> `BytedanceWebview` + Studio V1/V2) и скрытие FAILED постов."""
     _setup_logging(verbose)
-    cfg, store = _init_env(config)
+    _, store = _init_env(config)
 
-    async def _run_once() -> None:
+    async def _run_once(cycle_idx: int) -> None:
         targets = (
             [store.load_account(account_id)]
             if account_id
@@ -520,7 +666,8 @@ def appeal_restrictions(
             console.print("[yellow]Нет авторизованных аккаунтов с готовым `x-device`.[/yellow]")
             return
 
-        table = Table(title="Снятие огранов (Account Updates / TNS & TikTok Studio)")
+        json_out = []
+        table = Table(title="Снятие огранов (Mobile IDC + WebView TNS + TikTok Studio)")
         table.add_column("Account", style="bold cyan")
         table.add_column("Уровень")
         table.add_column("Target / Aweme ID")
@@ -529,63 +676,74 @@ def appeal_restrictions(
         table.add_column("Статус до")
         table.add_column("Результат")
 
-        async with KintaroClient(cfg) as client:
-            for acc in targets:
-                post_ids: list[str] = []
-                try:
-                    posts_resp = await client.get_self_posts(acc, count=20)
-                    store.save_account(acc)
-                    for item in extract_feed_items(posts_resp, cfg.response_mapping):
-                        aid = extract_aweme_id(item, cfg.response_mapping)
-                        if aid and aid not in post_ids:
-                            post_ids.append(aid)
-                except Exception as exc:
-                    console.print(f"[yellow][{acc.account_id}] Не удалось получить список постов через API ({exc}), проверяю уведомления...[/yellow]")
+        for acc in targets:
+            try:
+                summary = await remove_account_restrictions(
+                    acc,
+                    appeal_text=appeal_text,
+                    dry_run=dry_run,
+                    hide_rejected=hide_rejected,
+                )
+            except Exception as exc:
+                console.print(f"[red]✗ \\[{acc.account_id}] Ошибка модуля апелляций: {exc}[/red]")
+                continue
 
-                try:
-                    summary = await remove_account_restrictions(
-                        acc, post_ids=post_ids, appeal_text=appeal_text
+            if as_json:
+                json_out.append({"cycle": cycle_idx, **asdict(summary)})
+                continue
+
+            if not summary.items:
+                table.add_row(
+                    acc.account_id,
+                    "—",
+                    "—",
+                    "—",
+                    "Чисто (активных огранов не найдено)",
+                    "ok",
+                    "[green]Огранов нет[/green]",
+                )
+            else:
+                for it in summary.items:
+                    scope_label = (
+                        "Аккаунт/Уведомления"
+                        if it.scope == "account_or_inbox"
+                        else ("Скрытие в Private" if it.scope == "post_cleanup" else "Пост (Studio)")
                     )
-                except Exception as exc:
-                    console.print(f"[red]✗ [{acc.account_id}] Ошибка модуля апелляций: {exc}[/red]")
-                    continue
-
-                if not summary.items:
+                    res_fmt = (
+                        f"[bold green]✓ {it.detail}[/bold green]"
+                        if it.appealed_now
+                        else f"[yellow]{it.detail}[/yellow]"
+                    )
                     table.add_row(
-                        acc.account_id,
-                        "—",
-                        "—",
-                        "—",
-                        "Чисто (активных огранов не найдено)",
-                        "ok",
-                        "[green]Огранов нет[/green]",
+                        it.account_id,
+                        scope_label,
+                        it.target_id,
+                        it.punish_key or "—",
+                        it.title,
+                        it.previous_state,
+                        res_fmt,
                     )
-                else:
-                    for it in summary.items:
-                        res_fmt = (
-                            f"[bold green]✓ {it.detail}[/bold green]"
-                            if it.appealed_now
-                            else f"[yellow]{it.detail}[/yellow]"
-                        )
-                        table.add_row(
-                            it.account_id,
-                            "Аккаунт/Уведомления" if it.scope == "account_or_inbox" else "Пост (Studio)",
-                            it.target_id,
-                            it.punish_key or "—",
-                            it.title,
-                            it.previous_state,
-                            res_fmt,
-                        )
 
-        console.print(table)
+        if as_json:
+            print(json.dumps(json_out if len(json_out) > 1 else (json_out[0] if json_out else {}), ensure_ascii=False, indent=2))
+        else:
+            console.print(table)
 
     async def _driver() -> None:
+        cycle = 0
         while True:
-            await _run_once()
-            if not loop:
+            cycle += 1
+            await _run_once(cycle)
+            if not loop or (cycles > 0 and cycle >= cycles):
                 break
-            console.print(f"[dim]Следующая проверка огранов через {interval_minutes:.1f} мин...[/dim]")
-            await asyncio.sleep(max(10.0, interval_minutes * 60.0))
+            wait_s = (
+                max(10.0, interval_minutes * 60.0)
+                if interval_minutes is not None
+                else random.uniform(*WATCH_POLL_SECONDS)
+            )
+            if not as_json:
+                console.print(f"[dim]Следующий HTTP-опрос по кукам через {wait_s:.0f} сек...[/dim]")
+            await asyncio.sleep(wait_s)
 
     asyncio.run(_driver())
 
@@ -593,32 +751,33 @@ def appeal_restrictions(
 @app.command("unban")
 def unban_one_or_file(
     target: Annotated[str, typer.Argument(help="Шоп-строка аккаунта, путь к .txt файлу строк, либо account_id из базы")],
-    proxy: Annotated[str | None, typer.Option("--proxy", "-p", help="Прокси (обязателен для новых строк/.txt)")] = None,
+    proxy: Annotated[str | None, typer.Option("--proxy", "-p", help="Прокси (http/socks5://... или ip:port:user:pass)")] = None,
     region: Annotated[str, typer.Option("--region", "-r", help="Целевой регион профиля (например US)")] = "US",
     appeal_text: Annotated[
         str,
         typer.Option("--reason", help="Текст обоснования апелляции"),
     ] = "Our content is original, authentic, and strictly follows all TikTok Community Guidelines.",
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Только аудит без отправки POST апелляций")] = False,
+    hide_rejected: Annotated[bool, typer.Option("--hide-rejected", help="Переводить отклонённые (FAILED) посты в Private")] = False,
     config: Annotated[Path | None, typer.Option("--config", "-c")] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
 ) -> None:
-    """Всё-в-одном: подключить Outlook Hub / TOTP, войти в TikTok и сразу снять все ограны с аккаунта и постов."""
+    """Всё-в-одном: подключить Outlook Hub / TOTP, войти в TikTok, провести HTTP-аудит и снять все ограны."""
     _setup_logging(verbose)
     cfg, store = _init_env(config)
 
     accounts_to_process: list[AccountRecord] = []
     maybe_path = Path(target)
     if maybe_path.is_file():
-        if not proxy:
+        default_px = proxy
+        if not default_px:
             existing_any = store.list_accounts()
-            proxy = existing_any[0].proxy if existing_any else None
-        if not proxy:
-            raise typer.BadParameter("Укажи прокси через `-p socks5://...` для импорта новых строк.")
+            default_px = existing_any[0].proxy if existing_any else ""
         for raw_line in maybe_path.read_text(encoding="utf-8").splitlines():
             s = raw_line.strip()
             if not s or s.startswith("#"):
                 continue
-            acc = parse_shop_account_line(s, proxy=proxy, region=region)
+            acc = parse_shop_account_line(s, proxy=default_px or "", region=region)
             if store.account_path(acc.account_id).exists():
                 old = store.load_account(acc.account_id)
                 if old.device is not None:
@@ -629,12 +788,11 @@ def unban_one_or_file(
             store.save_account(acc)
             accounts_to_process.append(acc)
     elif ":" in target or "|" in target:
-        if not proxy:
+        default_px = proxy
+        if not default_px:
             existing_any = store.list_accounts()
-            proxy = existing_any[0].proxy if existing_any else None
-        if not proxy:
-            raise typer.BadParameter("Укажи прокси через `-p socks5://...` для новой строки.")
-        acc = parse_shop_account_line(target, proxy=proxy, region=region)
+            default_px = existing_any[0].proxy if existing_any else ""
+        acc = parse_shop_account_line(target, proxy=default_px or "", region=region)
         if store.account_path(acc.account_id).exists():
             old = store.load_account(acc.account_id)
             if old.device is not None:
@@ -648,7 +806,7 @@ def unban_one_or_file(
         accounts_to_process.append(store.load_account(target))
 
     async def _run() -> None:
-        table = Table(title="Авто-вход (Outlook Hub / TOTP) + Снятие огранов")
+        table = Table(title="Авто-вход (Outlook Hub / TOTP) + 3-канальное снятие огранов")
         table.add_column("Account", style="bold cyan")
         table.add_column("Уровень")
         table.add_column("Target / Aweme ID")
@@ -669,21 +827,15 @@ def unban_one_or_file(
                     console.print(f"[red]✗ \\[{acc.account_id}] Ошибка входа: {exc}[/red]")
                     continue
 
-                post_ids: list[str] = []
-                try:
-                    posts_resp = await client.get_self_posts(acc, count=20)
-                    store.save_account(acc)
-                    for item in extract_feed_items(posts_resp, cfg.response_mapping):
-                        aid = extract_aweme_id(item, cfg.response_mapping)
-                        if aid and aid not in post_ids:
-                            post_ids.append(aid)
-                except Exception as exc:
-                    console.print(f"[yellow]\\[{acc.account_id}] Предупреждение списка постов: {exc}[/yellow]")
-
                 try:
                     summary = await remove_account_restrictions(
-                        acc, post_ids=post_ids, appeal_text=appeal_text
+                        acc,
+                        appeal_text=appeal_text,
+                        dry_run=dry_run,
+                        hide_rejected=hide_rejected,
                     )
+                    if summary.audit:
+                        _print_rich_audit(summary.audit)
                 except Exception as exc:
                     console.print(f"[red]✗ \\[{acc.account_id}] Ошибка модуля апелляций: {exc}[/red]")
                     continue
@@ -692,6 +844,11 @@ def unban_one_or_file(
                     table.add_row(acc.account_id, "—", "—", "—", "Чисто", "ok", "[green]Огранов нет[/green]")
                 else:
                     for it in summary.items:
+                        scope_label = (
+                            "Аккаунт/Уведомления"
+                            if it.scope == "account_or_inbox"
+                            else ("Скрытие в Private" if it.scope == "post_cleanup" else "Пост (Studio)")
+                        )
                         res_fmt = (
                             f"[bold green]✓ {it.detail}[/bold green]"
                             if it.appealed_now
@@ -699,7 +856,7 @@ def unban_one_or_file(
                         )
                         table.add_row(
                             it.account_id,
-                            "Аккаунт/Уведомления" if it.scope == "account_or_inbox" else "Пост (Studio)",
+                            scope_label,
                             it.target_id,
                             it.punish_key or "—",
                             it.title,

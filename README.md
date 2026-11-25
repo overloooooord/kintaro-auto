@@ -12,9 +12,9 @@
    - **Фото (`jpg`/`png`, до 10 слайдов по 10 МБ):** удаление EXIF/ICC профилей, микро-кроп, лёгкий цветовой сдвиг и мутация отдельных пикселей для смены хеша.
 5. **Уникализация текста и валидация упоминаний** — поддержка спинтакса `{Вариант А|Вариант Б}` и автоматическая постановка обязательного пробела после каждого `@username ` согласно спецификации Kintaro API (`description_mentions`).
 6. **Мониторинг теней (`check-shadows`)** — сверка `GET /v1/account/posts` и публичного `GET /v1/post/get` с проверкой нулевых просмотров спустя заданное время.
-7. **Автоматическое снятие огранов (`appeal`)** — без траты платных AUTH-кредитов Kintaro поднимает сессию по кукам `x-device.cookies` в headless Chrome и проверяет сразу оба контура модерации TikTok:
-   - **Огран на весь аккаунт и инбокс (`System Notifications → Account Updates`, `group=661/46/47`):** находит плашки `Account ineligible for recommendation` (`object_type=4, punish_type=2048`) и уведомления о скрытых постах, открывает их в мобильном `BytedanceWebview` контексте и отправляет апелляцию (`POST /tns-api/appeal/post-commit`) с ретраями против бага TikTok `Network Error`.
-   - **Постовые ограны рекомендаций в TikTok Studio (`Ineligible for the For You feed`):** проверяет каждый `aweme_id` через оба эндпоинта модерации (`/mod/v1/getPenaltyDetails/` → `/mod/v1/submitAppeals` и `/api/moderation/penalties/gettransparencypagecontent` → `/api/moderation/penalties/submitappeal`) и автоматически подаёт апелляцию.
+7. **Мгновенный HTTP-аудит (`audit`) и 3-канальное снятие огранов (`appeal` / `unban`)** — за `0$` Kintaro без лишних запусков браузера опрашивает региональный мобильный шлюз кластера аккаунта (`api16-normal-no1a.tiktokv.eu` и др.) и TikTok Studio по кукам сессии:
+   - **Мобильный шлюз уведомлений (`group=47/661`, `/aweme/v1/notice/multi/` + `/api/violation/v1/get_violation_detail`):** достаёт точный статус (`Effecting`, `Appealing`, `AppealSuccess`, `AppealFailed`), `AppealId`, источник `bric_social`, проверяет плашку `Update your account region` и подаёт апелляцию каскадом из 3 каналов: `POST /api/violation/v1/commit_appeal` → `POST /aweme/v2/appeal/commit/` → фоллбэк в headless Chrome `BytedanceWebview` (`POST /tns-api/appeal/post-commit`).
+   - **Постовые ограны в TikTok Studio (`/tiktok/creator/manage/item_list/v1/`):** проверяет до 50 последних постов через `/mod/v1/getPenaltyDetails/` и `/api/moderation/penalties/gettransparencypagecontent`, снимает флаги `For You feed` с человеческой паузой `8.5–17.5с` между постами и по флагу `--hide-rejected` автоматически переводит отклонённые (`FAILED`) посты в `Private`, чтобы не словить 30-дневный бан `punish_type=2048` на весь аккаунт.
 
 > **Важно:** ни один скрипт на стороне клиента не может гарантировать 0% теней, если используются грязные датацентровые прокси (не совпадающие по GEO с `region`), спам-крео под фильтр модерации или убитые аккаунты. Инструмент полностью убирает технические триггеры со стороны API, сессий и дублей медиа.
 
@@ -78,11 +78,14 @@ uv run kintaro-auto run-queue queue.json --daemon
 # Проверка залитых постов на 0 просмотров / скрытие
 uv run kintaro-auto check-shadows
 
-# Разовый прогон проверки и авто-снятия огранов аккаунта и постов
-uv run kintaro-auto appeal
+# Мгновенный HTTP-аудит всех сессий (RegCountry, CurrentRegion, bric_social, group=47/661 и посты в Studio)
+uv run kintaro-auto audit
 
-# Бесконечный фоновый сторож огранов (каждые 15 минут проверяет аккаунты и отправляет апелляции)
-uv run kintaro-auto appeal --loop --interval-min 15
+# Разовый прогон 3-канального снятия огранов + авто-перевод отклонённых (FAILED) постов в Private
+uv run kintaro-auto appeal --hide-rejected
+
+# Бесконечный фоновый сторож по кукам (анти-фрод рандом 95–165 сек между циклами без повторных логинов)
+uv run kintaro-auto appeal --watch --hide-rejected
 
 # Локальный тест уникализатора медиа без API-ключа
 uv run kintaro-auto uniquify-test media/clip1.mp4

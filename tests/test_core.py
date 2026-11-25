@@ -13,6 +13,7 @@ from PIL import Image
 
 from kintaro_auto.appeals import (
     _extract_cookies_for_browser,
+    _extract_query_from_schema,
     _resolve_playwright_http_proxy,
     build_tns_appeal_reason_json,
 )
@@ -108,6 +109,25 @@ def test_outlook_hub_line_parser() -> None:
     assert acc.totp_token == ""
     assert acc.use_outlook_hub is True
     assert acc.auth_method == "email"
+
+
+def test_inline_proxy_and_schema_unwrap() -> None:
+    acc = parse_shop_account_line(
+        "demo_u2|Secret!1|demo@example.com|JBSWY3DPEHPK3PXP|198.51.100.7:8080:pxuser:pxpass",
+        proxy="http://fallback:pass@127.0.0.1:3128",
+        region="US",
+    )
+    assert acc.username == "demo_u2"
+    assert acc.totp_token == "JBSWY3DPEHPK3PXP"
+    assert acc.proxy == "http://pxuser:pxpass@198.51.100.7:8080"
+
+    inner_url, q = _extract_query_from_schema(
+        "aweme://webview?url=https%3A%2F%2Fwww.tiktok.com%2Fviolation-appeal%3Fpunish_id%3D771001%26object_id%3D999%26punish_type%3D2048"
+    )
+    assert "violation-appeal" in inner_url
+    assert q["punish_id"] == "771001"
+    assert q["object_id"] == "999"
+    assert q["punish_type"] == "2048"
 
 
 def test_spintax_and_mentions_trailing_space() -> None:

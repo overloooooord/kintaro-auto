@@ -6,6 +6,7 @@ import os
 import re
 import tempfile
 from pathlib import Path
+from urllib.parse import quote
 from kintaro_auto.models import AccountRecord, UploadTask
 
 
@@ -94,20 +95,51 @@ def _clean_markdown_links(raw: str) -> str:
     return s
 
 
+def normalize_proxy_url(raw_proxy: str) -> str:
+    """
+    Supports standard URLs (`socks5://...`, `http://...`) verbatim AND
+    shorthand `host:port:user:pass` or `host:port` formats.
+    """
+    raw = (raw_proxy or "").strip()
+    if not raw or "://" in raw:
+        return raw
+    parts = raw.split(":")
+    if len(parts) == 4:
+        host, port, user, pw = parts
+        return f"http://{quote(user, safe='-_')}:{quote(pw, safe='-_')}@{host}:{port}"
+    if len(parts) == 2:
+        return f"http://{raw}"
+    return raw
+
+
+def _looks_like_proxy_token(token: str) -> bool:
+    t = token.strip().lower()
+    if t.startswith(("http://", "https://", "socks5://", "socks5h://", "socks4://")):
+        return True
+    if re.match(r"^[a-z0-9.-]+:\d{2,5}(:.+)?$", t):
+        return True
+    if "@" in t and re.search(r":\d{2,5}$", t):
+        return True
+    return False
+
+
 def parse_shop_account_line(line: str, proxy: str, region: str) -> AccountRecord:
     """
-    Parses both shop formats:
-    1) Pipe format: `username|password|email|totp_token` (TikTok 2FA TOTP)
+    Parses shop & restriction-manager formats:
+    1) Pipe format: `username|password|email|totp_token[|proxy]` (TikTok 2FA TOTP + optional inline proxy)
     2) Outlook-Hub colon format (5/7/8 fields):
        `tt_login:tt_pass:outlook_email:outlook_pass:rec_email:rec_pass:hotmail_2fa`
        (where `hotmail_2fa` is Microsoft Authenticator TOTP for Outlook, NOT TikTok TOTP!)
     """
     cleaned = _clean_markdown_links(line)
+    effective_proxy = normalize_proxy_url(proxy)
     if "|" in cleaned:
         parts = [p.strip() for p in cleaned.split("|")]
+        if len(parts) >= 3 and _looks_like_proxy_token(parts[-1]):
+            effective_proxy = normalize_proxy_url(parts.pop())
         if len(parts) < 2:
             raise ValueError(
-                f"Не удалось разобрать строку аккаунта {line!r}. Ожидается `username|password|email|totp`."
+                f"Не удалось разобрать строку аккаунта {line!r}. Ожидается `username|password|email|totp[|proxy]`."
             )
         username = parts[0].lstrip("@")
         password = parts[1]
@@ -119,7 +151,7 @@ def parse_shop_account_line(line: str, proxy: str, region: str) -> AccountRecord
                 totp = candidate
         return AccountRecord(
             account_id=username,
-            proxy=proxy,
+            proxy=effective_proxy,
             region=region,
             auth_region="DE",
             auth_method="username",
@@ -165,7 +197,7 @@ def parse_shop_account_line(line: str, proxy: str, region: str) -> AccountRecord
 
         return AccountRecord(
             account_id=tt_u or primary_email,
-            proxy=proxy,
+            proxy=effective_proxy,
             region=region,
             auth_region="DE",
             auth_method="email",
@@ -187,7 +219,7 @@ def parse_shop_account_line(line: str, proxy: str, region: str) -> AccountRecord
         totp = raw_parts[2].replace(" ", "").upper() if len(raw_parts) >= 3 else ""
         return AccountRecord(
             account_id=username,
-            proxy=proxy,
+            proxy=effective_proxy,
             region=region,
             auth_region="DE",
             auth_method="username",

@@ -7,16 +7,20 @@ let DRAWER_ACCOUNT_ID = null;
 
 const SELECTED_IDS = new Set();
 const UPLOAD_TARGETS = new Set();
+const SERVER_MEDIA_SELECTED = new Set();
 let UPLOAD_FILES = [];
+let CAMPAIGN_PRESETS = [];
 let ALL_LOGS = [];
 let previewTimer = null;
 let spintaxTimer = null;
 
 const VIEW_TITLES = {
-  fleet: 'Флот аккаунтов и снятие огранов',
-  import: 'Пакетный импорт и Outlook Hub / TOTP вход',
-  upload: 'Студия анти-тень залива и уникализатор',
-  analytics: 'Радар теневых банов и аналитика Studio',
+  fleet: 'Флот аккаунтов, папки и снятие огранов 2048',
+  upload: 'Массовый Анти-Тень Залив (5 потоков · minimal_snow)',
+  import: 'Пакетный импорт (Outlook Hub / IMAP / TOTP / x-device)',
+  spy: 'Competitor Spy, клонирование крео и Комменты в ТОП #1',
+  tools: 'Взаимный Буст постов и Массовый Оформитель профилей',
+  analytics: 'Аналитика Studio, Радар теней и Авто-Пилот',
   settings: 'Тестер прокси и живой config.toml',
 };
 
@@ -63,9 +67,11 @@ function switchView(name) {
     btn.classList.toggle('active', btn.dataset.view === name);
   });
   document.getElementById('topTitle').textContent = VIEW_TITLES[name] || '';
-  if (name === 'analytics') renderAnalytics();
+  if (name === 'fleet') loadSortedFolders();
+  if (name === 'analytics') { renderAnalytics(); loadAutoPilotJobs(); }
   if (name === 'settings') loadConfig();
-  if (name === 'upload') renderUploadTargets();
+  if (name === 'upload') { renderUploadTargets(); loadPresets(); loadMediaLibrary(); }
+  if (name === 'spy') populateSpySeedAccounts();
 }
 
 function setFilter(f, btn) {
@@ -351,6 +357,7 @@ async function runBulk(action, extra = {}) {
   const ids = Array.from(SELECTED_IDS);
   if (!ids.length) return;
   if (action === 'delete' && !confirm(`Удалить ${ids.length} выбранных аккаунтов?`)) return;
+  if (action === 'clean_posts' && !confirm(`Безвозвратно удалить ВСЕ прошлые посты на ${ids.length} выбранных аккаунтах?`)) return;
   try {
     await apiPost('/api/bulk-action', {
       account_ids: ids,
@@ -463,6 +470,7 @@ function renderDrawer() {
                 <td style="text-align:right;white-space:nowrap;">
                   <button class="btn btn-sm" onclick="setPostVis('${esc(a.account_id)}','${esc(p.item_id)}',true)">Private</button>
                   <button class="btn btn-sm btn-ghost" onclick="setPostVis('${esc(a.account_id)}','${esc(p.item_id)}',false)">Public</button>
+                  <button class="btn btn-sm btn-rose" title="Удалить пост навсегда" onclick="deleteSinglePost('${esc(a.account_id)}','${esc(p.item_id)}')">🗑</button>
                 </td>
               </tr>`;
             }).join('')}
@@ -567,6 +575,14 @@ async function setPostVis(aid, itemId, priv) {
     toast(r.message, 'success');
   } catch (e) { toast(e.message, 'err'); }
 }
+async function deleteSinglePost(aid, itemId) {
+  if (!confirm(`Удалить пост ${itemId} с аккаунта @${aid} навсегда?`)) return;
+  try {
+    const r = await apiJson(`/api/accounts/${encodeURIComponent(aid)}/posts/${encodeURIComponent(itemId)}`, { method: 'DELETE' });
+    toast(r.message || `Пост ${itemId} удалён`, 'success');
+    await fetchState();
+  } catch (e) { toast(e.message, 'err'); }
+}
 async function toggleWatchdog() {
   const next = !(STATE.watchdog && STATE.watchdog.enabled);
   await apiPost('/api/watchdog', { enabled: next, hide_rejected: document.getElementById('chkHideRejected').checked });
@@ -621,6 +637,7 @@ async function submitBatchImport() {
       proxies_text: document.getElementById('impProxies').value,
       region: document.getElementById('impRegion').value,
       auto_login: document.getElementById('impAutoLogin').checked,
+      auto_clean_posts: document.getElementById('impAutoCleanPosts')?.checked || false,
       auto_appeal: document.getElementById('impAutoAppeal').checked,
       hide_rejected: document.getElementById('chkHideRejected').checked,
     });
@@ -686,13 +703,13 @@ function scheduleSpintaxPreview() {
 }
 
 function renderUploadTargets() {
-  const authed = (STATE.accounts || []).filter(a => a.authenticated);
+  const allAccs = (STATE.accounts || []).slice().sort((a, b) => Number(b.authenticated) - Number(a.authenticated));
   const box = document.getElementById('uploadTargetsList');
-  if (!authed.length) {
-    box.innerHTML = `<div style="color:var(--muted);font-size:12px;">Нет авторизованных аккаунтов.</div>`;
+  if (!allAccs.length) {
+    box.innerHTML = `<div style="color:var(--muted);font-size:12px;">Нет аккаунтов в базе.</div>`;
     return;
   }
-  box.innerHTML = authed.map(a => {
+  box.innerHTML = allAccs.map(a => {
     const checked = UPLOAD_TARGETS.has(a.account_id) ? 'checked' : '';
     return `<label style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-radius:11px;background:rgba(8,11,19,0.7);border:1px solid var(--border);cursor:pointer;">
       <span style="display:flex;align-items:center;gap:9px;">
@@ -708,9 +725,9 @@ function toggleUploadTarget(aid) {
   if (UPLOAD_TARGETS.has(aid)) UPLOAD_TARGETS.delete(aid); else UPLOAD_TARGETS.add(aid);
 }
 function toggleAllUploadTargets() {
-  const authed = (STATE.accounts || []).filter(a => a.authenticated).map(a => a.account_id);
-  const all = authed.every(id => UPLOAD_TARGETS.has(id));
-  if (all) UPLOAD_TARGETS.clear(); else authed.forEach(id => UPLOAD_TARGETS.add(id));
+  const allIds = (STATE.accounts || []).map(a => a.account_id);
+  const all = allIds.length > 0 && allIds.every(id => UPLOAD_TARGETS.has(id));
+  if (all) UPLOAD_TARGETS.clear(); else allIds.forEach(id => UPLOAD_TARGETS.add(id));
   renderUploadTargets();
 }
 
@@ -723,6 +740,8 @@ async function submitUpload() {
   fd.append('music_search', document.getElementById('upMusic').value);
   fd.append('skip_warmup', document.getElementById('upSkipWarmup').checked);
   fd.append('force_cooldown', document.getElementById('upForceCooldown').checked);
+  fd.append('delete_old_posts', document.getElementById('upDelOld')?.checked || false);
+  fd.append('appeal_after_upload', document.getElementById('upAutoAppeal')?.checked || false);
 
   const btn = document.getElementById('btnUpload'); btn.disabled = true;
   try {
@@ -753,9 +772,12 @@ async function previewUniquifier() {
 }
 
 async function submitCampaign() {
-  if (!UPLOAD_FILES.length) return toast('Добавь 1–10 фото-слайдов или MP4 видео!', 'warn');
+  if (!UPLOAD_FILES.length && !SERVER_MEDIA_SELECTED.size) {
+    return toast('Добавь 1–10 фото-слайдов, MP4 видео или выбери файлы из state/media/!', 'warn');
+  }
   const fd = new FormData();
   UPLOAD_FILES.forEach(f => fd.append('files', f));
+  fd.append('server_media_files', Array.from(SERVER_MEDIA_SELECTED).join(','));
   fd.append('account_ids', Array.from(UPLOAD_TARGETS).join(','));
   fd.append('description', document.getElementById('upDesc').value);
   fd.append('photo_mode', document.getElementById('upPhotoMode').value);
@@ -776,6 +798,265 @@ async function submitCampaign() {
     const r = await apiJson('/api/campaign/run', { method: 'POST', body: fd });
     toast(`🚀 Кампания запущена в фоне на ${r.accounts} акк.! Следи за Live Console.`, 'success');
   } catch (e) { toast(e.message, 'err'); } finally { btn.disabled = false; }
+}
+
+async function loadSortedFolders() {
+  const grid = document.getElementById('sortedFoldersGrid');
+  if (!grid) return;
+  try {
+    const r = await apiJson('/api/folders');
+    const icons = { clean: '✅', ogran_na_proverke: '⏳', ogran_ne_snyat: '🚨', errors: '❌' };
+    grid.innerHTML = (r.folders || []).map(f => `
+      <div style="background:rgba(15,23,42,0.55);border:1px solid var(--border);border-radius:10px;padding:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <span style="font-size:12px;font-weight:600;">${icons[f.key] || '📁'} ${esc(f.title)}</span>
+          <strong class="mono" style="font-size:15px;">${f.count}</strong>
+        </div>
+        <div style="display:flex;gap:6px;">
+          <a class="btn btn-sm" href="/api/folders/${encodeURIComponent(f.key)}/export?fmt=txt" style="text-decoration:none;flex:1;text-align:center;">⬇ TXT</a>
+          <a class="btn btn-sm" href="/api/folders/${encodeURIComponent(f.key)}/export?fmt=zip" style="text-decoration:none;flex:1;text-align:center;">📦 ZIP</a>
+        </div>
+      </div>`).join('');
+  } catch (_) {}
+}
+
+async function loadPresets() {
+  const sel = document.getElementById('campPresetSelect');
+  if (!sel) return;
+  try {
+    const r = await apiJson('/api/presets');
+    CAMPAIGN_PRESETS = r.campaign_presets || [];
+    sel.innerHTML = '<option value="">⚡ Выбрать пресет...</option>' +
+      CAMPAIGN_PRESETS.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
+  } catch (_) {}
+}
+
+function applySelectedPreset() {
+  const pid = document.getElementById('campPresetSelect').value;
+  const p = CAMPAIGN_PRESETS.find(x => x.id === pid);
+  if (!p) return;
+  if (p.description != null) document.getElementById('upDesc').value = p.description;
+  if (p.photo_mode) document.getElementById('upPhotoMode').value = p.photo_mode;
+  if (p.auto_music_query != null) document.getElementById('upMusic').value = p.auto_music_query;
+  if (p.threads) document.getElementById('upThreads').value = p.threads;
+  if (p.copies_count) document.getElementById('upCopies').value = p.copies_count;
+  if (p.restart_every_n != null) document.getElementById('upRestartN').value = p.restart_every_n;
+  if (p.delay_min_sec != null) document.getElementById('upDelayMin').value = p.delay_min_sec;
+  if (p.delay_max_sec != null) document.getElementById('upDelayMax').value = p.delay_max_sec;
+  if (p.region) document.getElementById('upRegion').value = p.region;
+  document.getElementById('upRandTags').checked = Boolean(p.randomize_tags);
+  document.getElementById('upDelOld').checked = Boolean(p.delete_old_posts);
+  document.getElementById('upAutoAppeal').checked = Boolean(p.auto_appeal_2048);
+  toast(`Применён пресет: ${p.name}`, 'success');
+}
+
+async function saveCurrentPreset() {
+  const name = prompt('Название нового пресета кампании:', 'Мой US пресет (minimal_snow)');
+  if (!name) return;
+  const payload = {
+    name,
+    description: document.getElementById('upDesc').value,
+    photo_mode: document.getElementById('upPhotoMode').value,
+    auto_music_query: document.getElementById('upMusic').value,
+    threads: parseInt(document.getElementById('upThreads').value || '5', 10),
+    copies_count: parseInt(document.getElementById('upCopies').value || '6', 10),
+    restart_every_n: parseInt(document.getElementById('upRestartN').value || '3', 10),
+    delay_min_sec: parseFloat(document.getElementById('upDelayMin').value || '14'),
+    delay_max_sec: parseFloat(document.getElementById('upDelayMax').value || '20'),
+    region: (document.getElementById('upRegion').value || 'US').toUpperCase(),
+    randomize_tags: document.getElementById('upRandTags').checked,
+    delete_old_posts: document.getElementById('upDelOld').checked,
+    auto_appeal_2048: document.getElementById('upAutoAppeal').checked,
+  };
+  try {
+    await apiPost('/api/presets/save', payload);
+    toast('💾 Пресет сохранён!', 'success');
+    await loadPresets();
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function loadMediaLibrary() {
+  const grid = document.getElementById('serverMediaGrid');
+  if (!grid) return;
+  try {
+    const r = await apiJson('/api/media');
+    const files = r.files || [];
+    if (!files.length) {
+      grid.innerHTML = '<span style="font-size:11.5px;color:var(--muted);">Пока пусто — загрузи файлы выше и нажми «В библиотеку» или склонируй из Шпиона.</span>';
+      return;
+    }
+    grid.innerHTML = files.map(f => {
+      const sel = SERVER_MEDIA_SELECTED.has(f.name);
+      return `<div onclick="toggleServerMedia('${esc(f.name)}')" style="cursor:pointer;padding:4px 8px;border-radius:7px;font-size:11.5px;border:1px solid ${sel ? 'var(--accent)' : 'var(--border)'};background:${sel ? 'rgba(99,102,241,0.22)' : 'rgba(15,23,42,0.5)'};display:flex;align-items:center;gap:6px;">
+        <span>${f.kind === 'video' ? '🎬' : '🖼'} ${esc(f.name)} <span style="color:var(--muted);">(${f.size_kb}КБ)</span></span>
+        <span onclick="event.stopPropagation();deleteServerMedia('${esc(f.name)}')" style="color:var(--err);font-weight:700;">×</span>
+      </div>`;
+    }).join('');
+  } catch (_) {}
+}
+
+function toggleServerMedia(name) {
+  if (SERVER_MEDIA_SELECTED.has(name)) SERVER_MEDIA_SELECTED.delete(name);
+  else SERVER_MEDIA_SELECTED.add(name);
+  loadMediaLibrary();
+}
+
+async function saveFilesToLibrary() {
+  if (!UPLOAD_FILES.length) return toast('Сначала перетащи файлы в зону загрузки!', 'warn');
+  const fd = new FormData();
+  UPLOAD_FILES.forEach(f => fd.append('files', f));
+  try {
+    const r = await apiJson('/api/media/upload', { method: 'POST', body: fd });
+    (r.saved || []).forEach(n => SERVER_MEDIA_SELECTED.add(n));
+    toast(`💾 Сохранено в библиотеку: ${(r.saved || []).length} шт.`, 'success');
+    await loadMediaLibrary();
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function deleteServerMedia(name) {
+  try {
+    await apiJson(`/api/media/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    SERVER_MEDIA_SELECTED.delete(name);
+    await loadMediaLibrary();
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function submitRawSessionsImport() {
+  const raw = (document.getElementById('rawSessInput').value || '').trim();
+  if (!raw) return toast('Вставь JSON / JSONL с x-device!', 'warn');
+  try {
+    const r = await apiPost('/api/sessions/import-raw', {
+      raw_text: raw,
+      default_proxy: (document.getElementById('impProxies')?.value || '').split('\n')[0] || '',
+      default_region: document.getElementById('impRegion')?.value || 'US',
+    });
+    toast(`📥 Импортировано сессий: ${(r.imported || []).length}`, 'success');
+    document.getElementById('rawSessInput').value = '';
+    await fetchState();
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+function populateSpySeedAccounts() {
+  const sel = document.getElementById('cmtSeedAccount');
+  if (!sel) return;
+  const authed = (STATE.accounts || []).filter(a => a.authenticated);
+  sel.innerHTML = authed.map(a => `<option value="${esc(a.account_id)}">@${esc(a.username || a.account_id)}</option>`).join('');
+}
+
+async function cloneSpyCreative(awemeId) {
+  try {
+    const r = await apiPost('/api/spy/download', { target_post: awemeId });
+    (r.saved_files || []).forEach(n => SERVER_MEDIA_SELECTED.add(n));
+    toast(`🕵️ Склонировано без водянок: ${(r.saved_files || []).join(', ')} (добавлено в библиотеку!)`, 'success');
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function loadPostComments() {
+  const tp = (document.getElementById('cmtPostInput').value || '').trim();
+  if (!tp) return toast('Вставь ссылку на пост или AWEME ID', 'warn');
+  try {
+    const r = await apiPost('/api/comments/list', { target_post: tp, count: 25 });
+    document.getElementById('cmtResultBox').innerHTML = (r.comments || []).slice(0, 10).map(c => `
+      <div style="padding:5px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;gap:8px;">
+        <div><strong>@${esc(c.username)}</strong>: ${esc(c.text)} <span class="mono" style="color:var(--muted);">(${c.likes} ❤️)</span></div>
+        <button class="btn btn-sm btn-ghost" onclick="document.getElementById('cmtExistingCid').value='${esc(c.cid)}'">Выбрать CID</button>
+      </div>`).join('') || 'Комментариев нет.';
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function submitCommentBoost() {
+  const tp = (document.getElementById('cmtPostInput').value || '').trim();
+  if (!tp) return toast('Вставь ссылку на пост или AWEME ID', 'warn');
+  const btn = document.getElementById('btnBoostCmt'); btn.disabled = true;
+  try {
+    const r = await apiPost('/api/comments/boost', {
+      target_post: tp,
+      seed_account_id: document.getElementById('cmtSeedAccount').value || '',
+      existing_cid: document.getElementById('cmtExistingCid').value || '',
+      lead_comment_text: document.getElementById('cmtLeadText').value || '',
+      reply_templates: document.getElementById('cmtReplies').value || '',
+      reply_prob_pct: 40,
+      threads: 4,
+    });
+    toast(`💬 Коммент ${r.cid} забущен: ${r.likes_ok} лайков, ${r.replies_ok} ответов!`, 'success');
+  } catch (e) { toast(e.message, 'err'); } finally { btn.disabled = false; }
+}
+
+async function submitEngagementBoost() {
+  const btn = document.getElementById('btnRunBoost'); btn.disabled = true;
+  try {
+    const r = await apiPost('/api/boost/run', {
+      account_ids: Array.from(SELECTED_IDS),
+      target_post: document.getElementById('boostPostInput').value || '',
+      target_username: document.getElementById('boostUserInput').value || '',
+      do_view: document.getElementById('boostView').checked,
+      do_like: document.getElementById('boostLike').checked,
+      do_collect: document.getElementById('boostCollect').checked,
+      do_repost: document.getElementById('boostRepost').checked,
+      comments_text: document.getElementById('boostComments').value || '',
+      threads: 4,
+    });
+    toast(`🔥 Буст выполнен: ${r.success}/${r.total}`, 'success');
+  } catch (e) { toast(e.message, 'err'); } finally { btn.disabled = false; }
+}
+
+async function submitBulkBranding() {
+  const btn = document.getElementById('btnRunBrand'); btn.disabled = true;
+  try {
+    let avatarDataUrl = '';
+    const f = document.getElementById('brAvatarFile').files?.[0];
+    if (f) {
+      avatarDataUrl = await new Promise((res, rej) => {
+        const rd = new FileReader(); rd.onload = () => res(rd.result); rd.onerror = rej; rd.readAsDataURL(f);
+      });
+    }
+    const r = await apiPost('/api/branding/run', {
+      account_ids: Array.from(SELECTED_IDS),
+      avatar_data_url: avatarDataUrl,
+      uniquify_avatar: document.getElementById('brUniqAv').checked,
+      nickname_template: document.getElementById('brNick').value || '',
+      username_prefix: document.getElementById('brUnamePrefix').value || '',
+      bio_template: document.getElementById('brBio').value || '',
+      bio_url: document.getElementById('brBioUrl').value || '',
+      new_password: document.getElementById('brNewPass').value || '',
+      enable_totp: document.getElementById('brEnableTotp').checked,
+      threads: 3,
+    });
+    toast(`🎨 Оформлено профилей: ${r.success}/${r.total}`, 'success');
+    await fetchState();
+  } catch (e) { toast(e.message, 'err'); } finally { btn.disabled = false; }
+}
+
+async function loadAutoPilotJobs() {
+  const box = document.getElementById('autopilotList');
+  if (!box) return;
+  try {
+    const r = await apiJson('/api/autopilot');
+    const jobs = r.jobs || [];
+    box.innerHTML = jobs.length ? jobs.map(j => `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);">
+        <div><strong class="mono">${esc(j.action)}</strong> · каждые ${j.interval_minutes}м · след. через ${j.next_run_in_sec}с · запусков: ${j.runs_count}</div>
+        <button class="btn btn-sm btn-rose" onclick="deleteAutoPilotJob('${esc(j.id)}')">✕</button>
+      </div>`).join('') : 'Задач Авто-Пилота пока нет.';
+  } catch (_) {}
+}
+
+async function addAutoPilotJob() {
+  try {
+    await apiPost('/api/autopilot/add', {
+      action: document.getElementById('apAction').value,
+      interval_minutes: parseInt(document.getElementById('apInterval').value || '30', 10),
+    });
+    toast('⏰ Задача Авто-Пилота добавлена', 'success');
+    await loadAutoPilotJobs();
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function deleteAutoPilotJob(jid) {
+  try {
+    await apiJson(`/api/autopilot/${encodeURIComponent(jid)}`, { method: 'DELETE' });
+    await loadAutoPilotJobs();
+  } catch (e) { toast(e.message, 'err'); }
 }
 
 async function restartAccountApp(aid) {
@@ -802,8 +1083,17 @@ async function runCompetitorSpy() {
     document.getElementById('spyResultBox').innerHTML = `
       <div style="margin-bottom:8px;"><strong>@${esc(s.username)}</strong> · Подписчики: <span class="mono">${s.followers}</span> · Постов: <span class="mono">${s.posts_scanned}</span></div>
       <div class="mono" style="margin-bottom:8px;color:var(--accent-2);">Всего: ${s.total_views.toLocaleString()} · Средние: ${s.avg_views.toLocaleString()} · Макс: ${s.max_views.toLocaleString()}</div>
-      <div style="margin-bottom:6px;"><strong>Топ теги:</strong> ${(s.top_hashtags || []).slice(0, 8).map(t => `<span class="badge b-neutral">${esc(t.tag)} (${t.count})</span>`).join(' ')}</div>
-      <div><strong>Топ музыка:</strong> ${(s.top_music || []).slice(0, 4).map(m => `<div class="mono" style="font-size:11px;">• ${esc(m.label)} (${esc(m.music_id)}) ×${m.count}</div>`).join('')}</div>`;
+      <div style="margin-bottom:8px;"><strong>Топ теги:</strong> ${(s.top_hashtags || []).slice(0, 8).map(t => `<span class="badge b-neutral">${esc(t.tag)} (${t.count})</span>`).join(' ')}</div>
+      <div style="margin-bottom:10px;"><strong>Топ музыка:</strong> ${(s.top_music || []).slice(0, 4).map(m => `<div class="mono" style="font-size:11px;">• ${esc(m.label)} (${esc(m.music_id)}) ×${m.count}</div>`).join('')}</div>
+      <div><strong>Посты (1 клик — скачать без водянок в библиотеку):</strong>
+        ${(s.posts || []).slice(0, 8).map(p => `
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);">
+            <div style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+              <span class="mono" style="color:var(--ok);">${p.views.toLocaleString()}</span> · ${p.kind === 'photo' ? `🖼×${p.slides_count}` : '🎬'} ${esc(p.desc || p.aweme_id)}
+            </div>
+            <button class="btn btn-sm btn-emerald" style="white-space:nowrap;" onclick="cloneSpyCreative('${esc(p.aweme_id)}')">⬇ Клонировать</button>
+          </div>`).join('')}
+      </div>`;
   } catch (e) { toast(e.message, 'err'); } finally { btn.disabled = false; }
 }
 
@@ -1015,6 +1305,7 @@ function bindDropzone(elId, onFiles) {
   bindDropzone('mediaDropzone', files => handleMediaFiles(files));
   bindDropzone('txtDropzone', files => loadTxtFile({ target: { files } }));
   await fetchState();
+  loadSortedFolders();
   ALL_LOGS = (STATE.logs || []).slice();
   renderConsole();
 

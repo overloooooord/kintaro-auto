@@ -120,6 +120,33 @@ def save_campaign_preset(state_dir: Path, preset: dict[str, Any]) -> list[dict[s
     return items
 
 
+def delete_campaign_preset(state_dir: Path, preset_id: str) -> list[dict[str, Any]]:
+    items = [p for p in load_campaign_presets(state_dir) if p.get("id") != preset_id]
+    if not items:
+        items = list(DEFAULT_CAMPAIGN_PRESETS)
+    pfile = Path(state_dir) / "campaign_presets.json"
+    pfile.write_text(json.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8")
+    return items
+
+
+def save_media_bytes(state_dir: Path, filename: str, data: bytes) -> str:
+    mdir = Path(state_dir) / "media"
+    mdir.mkdir(parents=True, exist_ok=True)
+    safe_name = re.sub(r"[^a-zA-Z0-9._-]", "_", Path(filename).name) or f"creative_{int(time.time())}.jpg"
+    if not safe_name.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".mp4")):
+        safe_name += ".jpg"
+    (mdir / safe_name).write_bytes(data)
+    return safe_name
+
+
+def delete_media_file(state_dir: Path, filename: str) -> bool:
+    fp = Path(state_dir) / "media" / Path(filename).name
+    if fp.is_file():
+        fp.unlink(missing_ok=True)
+        return True
+    return False
+
+
 def list_media_library(state_dir: Path) -> list[dict[str, Any]]:
     mdir = Path(state_dir) / "media"
     mdir.mkdir(parents=True, exist_ok=True)

@@ -756,3 +756,170 @@ def test_web_v4_presets_uniquifier_preview_and_totp(tmp_path: Path) -> None:
     r_totp = tc.post("/api/totp/generate", json={"secret": "JBSWY3DPEHPK3PXP"})
     assert r_totp.status_code == 200
     assert len(r_totp.json()["code"]) == 6
+
+
+def test_web_v5_media_folders_exports_autopilot_and_system_info(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+    from kintaro_auto.appeals import sort_account_into_folder
+    from kintaro_auto.platform_utils import configure_windows_runtime, find_chromium_executable
+    from kintaro_auto.web import create_web_app
+
+    configure_windows_runtime()
+    _ = find_chromium_executable()
+
+    cfg_path = tmp_path / "config.toml"
+    sdir = tmp_path / "state"
+    cfg_path.write_text(f'state_dir = "{sdir}"\n', encoding="utf-8")
+    app = create_web_app(cfg_path)
+    tc = TestClient(app)
+
+    # 1. System Info
+    r_sys = tc.get("/api/system/info")
+    assert r_sys.status_code == 200 and r_sys.json()["ok"] is True
+
+    # 2. Media library upload / list / delete
+    img = tmp_path / "m1.jpg"
+    Image.new("RGB", (200, 300), (10, 20, 30)).save(img, format="JPEG")
+    r_up = tc.post("/api/media/upload", files=[("files", ("m1.jpg", img.read_bytes(), "image/jpeg"))])
+    assert r_up.status_code == 200 and "m1.jpg" in r_up.json()["saved"]
+    r_file = tc.get("/api/media/file/m1.jpg")
+    assert r_file.status_code == 200
+
+    # 3. Raw x-device session import + ZIP/JSONL + CSV exports + Sorted Folders ZIP
+    raw_sess = json.dumps({"username": "v5demo", "region": "US", "device": {"device_id": "123", "cookies": {"sessionid": "abc"}}})
+    r_imp = tc.post("/api/sessions/import-raw", json={"raw_text": raw_sess, "default_proxy": "http://u:p@127.0.0.1:8080"})
+    assert r_imp.status_code == 200 and r_imp.json()["imported"] == ["v5demo"]
+
+    assert tc.get("/api/sessions/export/zip").status_code == 200
+    assert tc.get("/api/sessions/export/jsonl").status_code == 200
+    r_csv = tc.get("/api/analytics/export.csv")
+    assert r_csv.status_code == 200 and "v5demo" in r_csv.text
+
+    acc_obj = AccountRecord(account_id="v5demo", username="v5demo", proxy="http://u:p@127.0.0.1:8080", region="US")
+    sort_account_into_folder(sdir, "clean", acc_obj)
+    assert tc.get("/api/folders/clean/export?fmt=txt").status_code == 200
+    assert tc.get("/api/folders/clean/export?fmt=zip").status_code == 200
+
+    # 4. Auto-Pilot scheduler add / list / delete
+    r_ap = tc.post("/api/autopilot/add", json={"action": "audit_all", "interval_minutes": 45})
+    assert r_ap.status_code == 200
+    jid = r_ap.json()["job"]["id"]
+    assert any(j["id"] == jid for j in tc.get("/api/autopilot").json()["jobs"])
+    assert tc.delete(f"/api/autopilot/{jid}").status_code == 200
+
+
+async def test_delete_all_posts_studio_and_kintaro_union_and_upload_cleanup_appeal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kintaro_auto.appeals import AccountAppealSummary
+    from kintaro_auto.models import UploadedPostRecord
+
+    src_img = tmp_path / "post.jpg"
+    Image.new("RGB", (360, 640), (45, 90, 140)).save(src_img, format="JPEG")
+
+    # Studio returns a private post ("studio_priv_1") + shared post ("shared_2")
+    async def fake_studio_ids(_acc: AccountRecord, *, max_posts: int = 200) -> list[str]:
+        return ["studio_priv_1", "shared_2"]
+
+    events: list[str] = []
+
+    async def fake_settle(_acc: AccountRecord, **_kwargs: Any) -> AccountAppealSummary:
+        events.append("appeal_settle")
+        return AccountAppealSummary(account_id=_acc.account_id, notice_appeals_verified=3)
+
+    monkeypatch.setattr("kintaro_auto.pipeline.list_studio_post_ids", fake_studio_ids)
+    monkeypatch.setattr("kintaro_auto.pipeline.wait_and_appeal_settle", fake_settle)
+
+    deleted_order: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        p = req.url.path
+        if p == "/v1/account/posts":
+            cursor = req.url.params.get("max_cursor", "0")
+            if cursor == "0":
+                return httpx.Response(
+                    200,
+                    json={
+                        "aweme_list": [{"aweme_id": "shared_2"}, {"aweme_id": "mobile_3"}],
+                        "has_more": 1,
+                        "max_cursor": "cursor_page_2",
+                    },
+                )
+            return httpx.Response(
+                200,
+                json={"aweme_list": [{"aweme_id": "mobile_4"}], "has_more": 0, "max_cursor": "0"},
+            )
+        if p == "/v1/post/delete":
+            body = json.loads(req.content.decode())
+            aid = body["aweme_id"]
+            deleted_order.append(aid)
+            events.append(f"delete:{aid}")
+            return httpx.Response(200, json={"status_code": 0, "status_msg": ""})
+        if p == "/v1/post/create/photo":
+            events.append("upload_photo")
+            return httpx.Response(200, json={"aweme_id": "fresh_new_999"})
+        return httpx.Response(200, json={"status_code": 0})
+
+    cfg = AppConfig()
+    cfg.state_dir = str(tmp_path / "state")
+    cfg.api.api_key = "demo_key"
+    cfg.api.save_raw_responses = False
+    cfg.uniquifier.temp_dir = str(tmp_path / "tmp_media")
+    store = StateStore(cfg.state_dir)
+
+    acc = AccountRecord(
+        account_id="clean_acc",
+        proxy="socks5://u:p@127.0.0.1:1080",
+        region="US",
+        authenticated=True,
+        device={"cookies": {"sessionid": "s1"}},
+        upload_history=[
+            UploadedPostRecord(aweme_id="shared_2", media_type="photo", source_files=[], description="old"),
+            UploadedPostRecord(aweme_id="keep_me", media_type="photo", source_files=[], description="keep"),
+        ],
+    )
+    store.save_account(acc)
+
+    async def fast_sleep(_: float) -> None:
+        return None
+
+    async with KintaroClient(cfg, transport=httpx.MockTransport(handler)) as client:
+        pipeline = AutomationPipeline(cfg, store, client, sleep_fn=fast_sleep, rng=random.Random(3))
+
+        # 1) Dry run finds all 4 unique posts across Studio + paginated Kintaro (2 pages), deletes 0
+        dry_cnt = await pipeline.delete_all_account_posts(acc, keep_ids={"mobile_4"}, dry_run=True)
+        assert dry_cnt == 3
+        assert deleted_order == []
+
+        # 2) execute_upload_task with delete_old_posts=True & appeal_after_upload=True runs in exact order
+        task = UploadTask(
+            task_id="up_clean_1",
+            account_id="clean_acc",
+            media_type="photo",
+            photo_paths=[str(src_img)],
+            description="Fresh #fyp",
+        )
+        updated_acc, rec = await pipeline.execute_upload_task(
+            task,
+            force_cooldown=True,
+            skip_warmup=True,
+            delete_old_posts=True,
+            appeal_after_upload=True,
+            settle_after_upload=True,
+        )
+
+    assert deleted_order == ["studio_priv_1", "shared_2", "mobile_3", "mobile_4"]
+    assert rec.aweme_id == "fresh_new_999"
+    assert events == [
+        "delete:studio_priv_1",
+        "delete:shared_2",
+        "delete:mobile_3",
+        "delete:mobile_4",
+        "upload_photo",
+        "appeal_settle",
+    ]
+    # Old deleted ID pruned; kept + new post remain in upload_history
+    remaining_hist = [p.aweme_id for p in updated_acc.upload_history]
+    assert "shared_2" not in remaining_hist
+    assert "keep_me" in remaining_hist
+    assert "fresh_new_999" in remaining_hist

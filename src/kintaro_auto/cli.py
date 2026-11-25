@@ -27,6 +27,7 @@ from kintaro_auto.client import AuthChallengeRequiredError, KintaroClient
 from kintaro_auto.config import AppConfig, load_config
 from kintaro_auto.models import AccountRecord, UploadTask, apply_device_geo_profile
 from kintaro_auto.pipeline import AutomationPipeline
+from kintaro_auto.platform_utils import configure_windows_runtime
 from kintaro_auto.response_adapters import extract_aweme_id, extract_feed_items
 from kintaro_auto.storage import (
     StateStore,
@@ -35,6 +36,8 @@ from kintaro_auto.storage import (
     save_queue,
 )
 from kintaro_auto.uniquifier import uniquify_photos, uniquify_video
+
+configure_windows_runtime()
 
 app = typer.Typer(
     name="kintaro-auto",
@@ -373,6 +376,9 @@ def upload_video(
     music_search: Annotated[str | None, typer.Option("--music-search", help="Найти музыку по ключу")] = None,
     force_cooldown: Annotated[bool, typer.Option("--force-cooldown", help="Игнорировать таймеры отлёжки/кулдауна")] = False,
     skip_warmup: Annotated[bool, typer.Option("--skip-warmup", help="Пропустить прогрев перед заливом")] = False,
+    delete_old: Annotated[bool, typer.Option("--delete-old/--keep-old", help="Удалить все прошлые посты перед заливом")] = False,
+    appeal: Annotated[bool, typer.Option("--appeal", help="Снять ограны Account Updates после залива")] = False,
+    settle: Annotated[bool, typer.Option("--settle/--no-settle", help="Ждать волну огранов при --appeal")] = True,
     config: Annotated[Path | None, typer.Option("--config", "-c")] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
 ) -> None:
@@ -394,7 +400,12 @@ def upload_video(
         async with KintaroClient(cfg) as client:
             pipeline = AutomationPipeline(cfg, store, client)
             acc, rec = await pipeline.execute_upload_task(
-                task, force_cooldown=force_cooldown, skip_warmup=skip_warmup
+                task,
+                force_cooldown=force_cooldown,
+                skip_warmup=skip_warmup,
+                delete_old_posts=delete_old,
+                appeal_after_upload=appeal,
+                settle_after_upload=settle,
             )
             console.print(
                 f"[green]✓ Видео залито на [{acc.account_id}]![/green] aweme_id={rec.aweme_id or 'не распознан'}"
@@ -415,6 +426,9 @@ def upload_photo(
     music_search: Annotated[str | None, typer.Option("--music-search")] = None,
     force_cooldown: Annotated[bool, typer.Option("--force-cooldown")] = False,
     skip_warmup: Annotated[bool, typer.Option("--skip-warmup")] = False,
+    delete_old: Annotated[bool, typer.Option("--delete-old/--keep-old", help="Удалить все прошлые посты перед заливом")] = False,
+    appeal: Annotated[bool, typer.Option("--appeal", help="Снять ограны Account Updates после залива")] = False,
+    settle: Annotated[bool, typer.Option("--settle/--no-settle", help="Ждать волну огранов при --appeal")] = True,
     config: Annotated[Path | None, typer.Option("--config", "-c")] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
 ) -> None:
@@ -436,7 +450,12 @@ def upload_photo(
         async with KintaroClient(cfg) as client:
             pipeline = AutomationPipeline(cfg, store, client)
             acc, rec = await pipeline.execute_upload_task(
-                task, force_cooldown=force_cooldown, skip_warmup=skip_warmup
+                task,
+                force_cooldown=force_cooldown,
+                skip_warmup=skip_warmup,
+                delete_old_posts=delete_old,
+                appeal_after_upload=appeal,
+                settle_after_upload=settle,
             )
             console.print(
                 f"[green]✓ Фото-пост залит на [{acc.account_id}]![/green] aweme_id={rec.aweme_id or 'не распознан'}"
@@ -789,10 +808,12 @@ def unban_one_or_file(
     include_studio: Annotated[bool, typer.Option("--include-studio", help="Также апилить посты в Studio (по умолчанию ВЫКЛ)")] = False,
     settle: Annotated[bool, typer.Option("--settle", help="Ждать окончания волны уведомлений после залива (до 240с)")] = False,
     hide_rejected: Annotated[bool, typer.Option("--hide-rejected", help="Переводить отклонённые (FAILED) посты в Private")] = False,
+    delete_old: Annotated[bool, typer.Option("--delete-old/--keep-old", help="Удалить все прошлые посты аккаунта после входа")] = False,
+    threads: Annotated[int, typer.Option("--threads", "-t", help="Параллельных потоков (1–10)")] = 1,
     config: Annotated[Path | None, typer.Option("--config", "-c")] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
 ) -> None:
-    """Всё-в-одном: подключить Outlook Hub / TOTP, войти в TikTok, провести HTTP-аудит и снять все ограны."""
+    """Всё-в-одном: подключить Outlook Hub / TOTP, войти в TikTok, (опц.) удалить прошлые посты, провести HTTP-аудит и снять все ограны."""
     _setup_logging(verbose)
     cfg, store = _init_env(config)
 
@@ -847,39 +868,57 @@ def unban_one_or_file(
 
         async with KintaroClient(cfg) as client:
             pipeline = AutomationPipeline(cfg, store, client)
-            for acc in accounts_to_process:
-                try:
-                    if not acc.authenticated or not acc.device:
-                        console.print(f"[cyan]→ Вход в \\[{acc.account_id}]...[/cyan]")
-                        acc = await pipeline.ensure_authenticated(acc)
-                        console.print(f"[green]✓ \\[{acc.account_id}] авторизован![/green]")
-                except Exception as exc:
-                    console.print(f"[red]✗ \\[{acc.account_id}] Ошибка входа: {exc}[/red]")
-                    continue
+            sem = asyncio.Semaphore(max(1, min(10, threads)))
 
-                try:
-                    if settle and not dry_run:
-                        summary = await wait_and_appeal_settle(
-                            acc,
-                            appeal_text=appeal_text,
-                            appeal_studio_posts=include_studio,
-                            hide_rejected=hide_rejected,
-                        )
-                    else:
-                        summary = await remove_account_restrictions(
-                            acc,
-                            appeal_text=appeal_text,
-                            dry_run=dry_run,
-                            appeal_studio_posts=include_studio,
-                            hide_rejected=hide_rejected,
-                        )
-                    store.save_account(acc)
-                    if summary.audit:
-                        _print_rich_audit(summary.audit)
-                except Exception as exc:
-                    console.print(f"[red]✗ \\[{acc.account_id}] Ошибка модуля апелляций: {exc}[/red]")
-                    continue
+            async def _process_one(acc: AccountRecord):
+                async with sem:
+                    try:
+                        if not acc.authenticated or not acc.device:
+                            console.print(f"[cyan]→ Вход в \\[{acc.account_id}]...[/cyan]")
+                            acc = await pipeline.ensure_authenticated(acc)
+                            console.print(f"[green]✓ \\[{acc.account_id}] авторизован![/green]")
+                    except Exception as exc:
+                        console.print(f"[red]✗ \\[{acc.account_id}] Ошибка входа: {exc}[/red]")
+                        return None
 
+                    if delete_old:
+                        try:
+                            del_cnt = await pipeline.delete_all_account_posts(acc, dry_run=dry_run)
+                            console.print(
+                                f"[green]🗑 \\[{acc.account_id}] {'[DRY-RUN] Найдено к удалению' if dry_run else 'Удалено старых постов'}: {del_cnt}[/green]"
+                            )
+                        except Exception as exc:
+                            console.print(f"[yellow]! \\[{acc.account_id}] Предупреждение удаления постов: {exc}[/yellow]")
+
+                    try:
+                        if settle and not dry_run:
+                            summary = await wait_and_appeal_settle(
+                                acc,
+                                appeal_text=appeal_text,
+                                appeal_studio_posts=include_studio,
+                                hide_rejected=hide_rejected,
+                            )
+                        else:
+                            summary = await remove_account_restrictions(
+                                acc,
+                                appeal_text=appeal_text,
+                                dry_run=dry_run,
+                                appeal_studio_posts=include_studio,
+                                hide_rejected=hide_rejected,
+                            )
+                        store.save_account(acc)
+                        if summary.audit:
+                            _print_rich_audit(summary.audit)
+                        return acc, summary
+                    except Exception as exc:
+                        console.print(f"[red]✗ \\[{acc.account_id}] Ошибка модуля апелляций: {exc}[/red]")
+                        return None
+
+            outcomes = await asyncio.gather(*(_process_one(a) for a in accounts_to_process))
+            for item in outcomes:
+                if item is None:
+                    continue
+                acc, summary = item
                 if not summary.items:
                     table.add_row(acc.account_id, "—", "—", "—", "Чисто", "ok", "[green]Огранов нет[/green]")
                 else:
@@ -1077,6 +1116,8 @@ def restart_app_command(
 @app.command("clean-posts")
 def clean_posts_command(
     account_id: Annotated[str | None, typer.Option("--account", "-a", help="Конкретный account_id (пусто = все авторизованные)")] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Показать сколько постов найдено без удаления")] = False,
+    threads: Annotated[int, typer.Option("--threads", "-t", help="Параллельных потоков (1–10)")] = 1,
     config: Annotated[Path | None, typer.Option("--config", "-c")] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
 ) -> None:
@@ -1084,13 +1125,24 @@ def clean_posts_command(
     _setup_logging(verbose)
     cfg, store = _init_env(config)
     targets = [store.load_account(account_id)] if account_id else [a for a in store.list_accounts() if a.authenticated]
+    if not targets:
+        raise typer.BadParameter("Нет аккаунтов для очистки постов.")
 
     async def _run() -> None:
+        sem = asyncio.Semaphore(max(1, min(10, threads)))
         async with KintaroClient(cfg) as client:
             pipeline = AutomationPipeline(cfg, store, client)
-            for acc in targets:
-                cnt = await pipeline.delete_all_account_posts(acc)
-                console.print(f"[green]✓ [{acc.account_id}] Удалено постов: {cnt}[/green]")
+
+            async def _clean_one(acc: AccountRecord) -> None:
+                async with sem:
+                    try:
+                        cnt = await pipeline.delete_all_account_posts(acc, dry_run=dry_run)
+                        label = "[DRY-RUN] Найдено постов" if dry_run else "Удалено постов"
+                        console.print(f"[green]✓ \\[{acc.account_id}] {label}: {cnt}[/green]")
+                    except Exception as exc:
+                        console.print(f"[red]✗ \\[{acc.account_id}] Ошибка очистки постов: {exc}[/red]")
+
+            await asyncio.gather(*(_clean_one(a) for a in targets))
 
     asyncio.run(_run())
 

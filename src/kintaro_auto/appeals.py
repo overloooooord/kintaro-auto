@@ -16,6 +16,7 @@ from playwright.async_api import BrowserContext, Page, async_playwright
 
 from kintaro_auto.captions import resolve_spintax
 from kintaro_auto.models import AccountRecord
+from kintaro_auto.platform_utils import find_chromium_executable
 
 logger = logging.getLogger("kintaro_auto")
 
@@ -832,22 +833,8 @@ async def _attach_fast_cdn_router(page: Page, direct_http: httpx.AsyncClient) ->
     await page.route("**/*", _route_handler)
 
 
-def _find_chrome_executable(explicit: str | None = None) -> str:
-    if explicit:
-        return explicit
-    for cand in CHROME_CANDIDATES:
-        if os.path.isfile(cand) and os.access(cand, os.X_OK):
-            return cand
-    # Fallback to Playwright's bundled Chromium (`~/.cache/ms-playwright/chromium-*/chrome-linux*/chrome`)
-    pw_cache = Path.home() / ".cache" / "ms-playwright"
-    if pw_cache.is_dir():
-        cands = sorted(pw_cache.glob("chromium-*/chrome-linux*/chrome"))
-        for c in reversed(cands):
-            if c.is_file() and os.access(c, os.X_OK):
-                return str(c)
-    raise RuntimeError(
-        "Не найден установленный Google Chrome / Chromium (`/usr/bin/google-chrome` или Playwright chromium)."
-    )
+def _find_chrome_executable(explicit: str | None = None) -> str | None:
+    return find_chromium_executable(explicit)
 
 
 async def _submit_notice_via_browser_webview(
@@ -869,14 +856,17 @@ async def _submit_notice_via_browser_webview(
             f"&punish_key={vio.punish_id}&punish_type={vio.punish_type}"
         )
 
+    launch_kwargs: dict[str, Any] = {
+        "headless": True,
+        "proxy": pw_proxy,
+        "args": ["--disable-blink-features=AutomationControlled", "--no-sandbox"],
+    }
+    if exe:
+        launch_kwargs["executable_path"] = exe
+
     async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as direct_http:
         async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                executable_path=exe,
-                headless=True,
-                proxy=pw_proxy,
-                args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
-            )
+            browser = await p.chromium.launch(**launch_kwargs)
             try:
                 ctx_webview: BrowserContext = await browser.new_context(
                     viewport={"width": 430, "height": 932},
@@ -1007,14 +997,17 @@ async def _submit_post_via_browser_studio(
     pw_proxy = _resolve_playwright_http_proxy(account.proxy)
     pw_cookies = _extract_cookies_for_browser(account)
 
+    launch_kwargs: dict[str, Any] = {
+        "headless": True,
+        "proxy": pw_proxy,
+        "args": ["--disable-blink-features=AutomationControlled", "--no-sandbox"],
+    }
+    if exe:
+        launch_kwargs["executable_path"] = exe
+
     async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as direct_http:
         async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                executable_path=exe,
-                headless=True,
-                proxy=pw_proxy,
-                args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
-            )
+            browser = await p.chromium.launch(**launch_kwargs)
             try:
                 ctx_desktop = await browser.new_context(
                     viewport={"width": 1440, "height": 900},

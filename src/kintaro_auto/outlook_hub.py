@@ -380,15 +380,9 @@ def _generate_pkce_pair() -> Tuple[str, str]:
 
 
 def _find_chrome_executable() -> Optional[str]:
-    for cand in (
-        "/usr/bin/google-chrome",
-        "/usr/bin/google-chrome-stable",
-        "/usr/bin/chromium",
-        "/usr/bin/chromium-browser",
-    ):
-        if os.path.isfile(cand) and os.access(cand, os.X_OK):
-            return cand
-    return shutil.which("google-chrome") or shutil.which("chromium")
+    from kintaro_auto.platform_utils import find_chromium_executable
+
+    return find_chromium_executable()
 
 
 def _exchange_auth_code(code: str, code_verifier: str, client_id: str = OUTLOOK_HUB_CLIENT_ID) -> Dict[str, Any]:

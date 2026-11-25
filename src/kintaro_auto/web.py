@@ -5,6 +5,7 @@ import base64
 import json
 import logging
 import random
+import shutil
 import tempfile
 import time
 import uuid
@@ -14,11 +15,12 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from kintaro_auto.appeals import (
+    SORTED_FOLDER_SPECS,
     WATCH_POLL_SECONDS,
     AccountAuditResult,
     audit_account_restrictions,
@@ -39,10 +41,37 @@ from kintaro_auto.models import (
     apply_device_geo_profile,
 )
 from kintaro_auto.pipeline import AutomationPipeline
-from kintaro_auto.presets import load_campaign_presets
-from kintaro_auto.spy import generate_live_totp, spy_competitor_profile
+from kintaro_auto.platform_utils import configure_windows_runtime, find_chromium_executable
+from kintaro_auto.presets import (
+    delete_campaign_preset,
+    delete_media_file,
+    list_media_library,
+    load_campaign_presets,
+    save_campaign_preset,
+    save_media_bytes,
+)
+from kintaro_auto.spy import (
+    download_creative_to_media,
+    fetch_post_comments_structured,
+    generate_live_totp,
+    run_top_comment_boost,
+    spy_competitor_profile,
+)
 from kintaro_auto.storage import StateStore, normalize_proxy_url, parse_shop_account_line
+from kintaro_auto.studio_ops import (
+    AutoPilotScheduler,
+    ScheduledJob,
+    export_all_sessions_jsonl,
+    export_all_sessions_zip,
+    export_analytics_csv,
+    export_sorted_folder_zip,
+    import_raw_sessions_text,
+    run_bulk_branding,
+    run_engagement_boost,
+)
 from kintaro_auto.uniquifier import PHOTO_UNIQUIFIER_PRESETS, uniquify_photo_bytes
+
+configure_windows_runtime()
 
 logger = logging.getLogger("kintaro_auto")
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -332,6 +361,7 @@ class BatchImportRequest(BaseModel):
     proxy: str = ""
     region: str = "US"
     auto_login: bool = True
+    auto_clean_posts: bool = False
     auto_appeal: bool = True
     hide_rejected: bool = True
 
@@ -372,7 +402,7 @@ class ProfileUpdateRequest(BaseModel):
 
 class BulkActionRequest(BaseModel):
     account_ids: list[str]
-    action: str  # audit | appeal | warmup | sync_geo | set_proxy | delete
+    action: str  # auth | audit | appeal | clean_posts | restart | warmup | sync_geo | set_proxy | delete
     region: str = "US"
     proxy: str = ""
     appeal_studio_posts: bool = False
@@ -402,6 +432,66 @@ class SpyRequest(BaseModel):
 
 class TotpRequest(BaseModel):
     secret: str
+
+
+class SpyDownloadRequest(BaseModel):
+    target_post: str
+    account_id: str = ""
+
+
+class CommentsListRequest(BaseModel):
+    target_post: str
+    account_id: str = ""
+    count: int = 30
+
+
+class CommentsBoostRequest(BaseModel):
+    target_post: str
+    seed_account_id: str = ""
+    lead_comment_text: str = ""
+    existing_cid: str = ""
+    booster_account_ids: list[str] = []
+    reply_templates: str = ""
+    reply_prob_pct: int = 30
+    threads: int = 4
+
+
+class EngagementBoostRequest(BaseModel):
+    account_ids: list[str] = []
+    target_post: str = ""
+    target_username: str = ""
+    do_view: bool = True
+    do_like: bool = True
+    do_collect: bool = False
+    do_repost: bool = False
+    comments_text: str = ""
+    threads: int = 4
+
+
+class BrandingRequest(BaseModel):
+    account_ids: list[str] = []
+    avatar_data_url: str = ""
+    uniquify_avatar: bool = True
+    nickname_template: str = ""
+    username_prefix: str = ""
+    bio_template: str = ""
+    bio_url: str = ""
+    new_password: str = ""
+    enable_totp: bool = False
+    threads: int = 3
+
+
+class RawSessionsImportRequest(BaseModel):
+    raw_text: str
+    default_proxy: str = ""
+    default_region: str = "US"
+
+
+class AutoPilotAddRequest(BaseModel):
+    action: str  # "audit_all" | "appeal_all" | "shadow_check"
+    interval_minutes: int = 30
+    delay_minutes: int = 0
+    note: str = ""
 
 
 class ConfigUpdateRequest(BaseModel):
@@ -660,6 +750,58 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
                     hub.push_event(f"Новый прокси назначен на {len(ids)} акк.", "success", kind="audit_updated")
                     return
 
+                if req.action == "auth":
+                    async with KintaroClient(hub.cfg) as client:
+                        pipeline = AutomationPipeline(hub.cfg, hub.store, client)
+                        for aid in ids:
+                            try:
+                                acc = hub.store.load_account(aid)
+                                if not acc.authenticated or not acc.device:
+                                    hub.push_event(f"[{aid}] Авторизация ({'Outlook Hub' if acc.use_outlook_hub else 'TOTP/Pass'})...", "info")
+                                    acc = await pipeline.ensure_authenticated(acc)
+                                    hub.push_event(f"[{aid}] Вход выполнен успешно!", "success", kind="audit_updated")
+                            except Exception as exc:
+                                hub.push_event(f"[{aid}] Ошибка входа: {exc}", "error")
+                            finally:
+                                hub.step_job(jid)
+                    hub.push_event("Пакетная авторизация завершена.", "success", kind="audit_updated")
+                    return
+
+                if req.action == "clean_posts":
+                    async with KintaroClient(hub.cfg) as client:
+                        pipeline = AutomationPipeline(hub.cfg, hub.store, client)
+                        for aid in ids:
+                            try:
+                                acc = hub.store.load_account(aid)
+                                cnt = await pipeline.delete_all_account_posts(acc)
+                                if aid in hub.audit_cache:
+                                    hub.audit_cache[aid]["post_penalties"] = []
+                                    hub.audit_cache[aid]["total_posts"] = 0
+                                    hub.audit_cache[aid]["total_views"] = 0
+                                    hub._save_audit_cache()
+                                hub.push_event(f"[{aid}] 🗑 Удалено старых постов: {cnt}", "success", kind="audit_updated")
+                            except Exception as exc:
+                                hub.push_event(f"[{aid}] Ошибка очистки постов: {exc}", "error")
+                            finally:
+                                hub.step_job(jid)
+                    hub.push_event("Пакетная очистка постов завершена.", "success", kind="audit_updated")
+                    return
+
+                if req.action == "restart":
+                    async with KintaroClient(hub.cfg) as client:
+                        pipeline = AutomationPipeline(hub.cfg, hub.store, client)
+                        for aid in ids:
+                            try:
+                                acc = hub.store.load_account(aid)
+                                await pipeline.restart_tiktok_app(acc, target_region=req.region)
+                                hub.push_event(f"[{aid}] 🔄 Приложение TikTok перезапущено", "success", kind="audit_updated")
+                            except Exception as exc:
+                                hub.push_event(f"[{aid}] Ошибка рестарта: {exc}", "error")
+                            finally:
+                                hub.step_job(jid)
+                    hub.push_event("Пакетный рестарт завершён.", "success", kind="audit_updated")
+                    return
+
                 if req.action == "audit":
                     for aid in ids:
                         try:
@@ -865,6 +1007,31 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=msg)
         return {"ok": True, "message": msg}
 
+    @app.delete("/api/accounts/{account_id}/posts/{item_id}")
+    async def delete_single_post_api(account_id: str, item_id: str) -> dict[str, Any]:
+        acc = hub.store.load_account(account_id)
+        try:
+            async with KintaroClient(hub.cfg) as client:
+                pipeline = AutomationPipeline(hub.cfg, hub.store, client)
+                ok, msg = await pipeline.delete_single_post(acc, item_id)
+        except Exception as exc:
+            hub.push_event(f"[{account_id}] Ошибка удаления поста {item_id}: {exc}", "error")
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not ok:
+            hub.push_event(f"[{account_id}] {msg}", "warn")
+            raise HTTPException(status_code=400, detail=msg)
+        if account_id in hub.audit_cache:
+            cached_posts = [
+                p for p in (hub.audit_cache[account_id].get("post_penalties") or [])
+                if str(p.get("item_id")) != str(item_id)
+            ]
+            hub.audit_cache[account_id]["post_penalties"] = cached_posts
+            hub.audit_cache[account_id]["total_posts"] = len(cached_posts)
+            hub.audit_cache[account_id]["total_views"] = sum(int(p.get("play_count") or 0) for p in cached_posts)
+            hub._save_audit_cache()
+        hub.push_event(f"[{account_id}] 🗑 {msg}", "success", kind="audit_updated")
+        return {"ok": True, "message": msg}
+
     @app.delete("/api/accounts/{account_id}")
     async def delete_account(account_id: str) -> dict[str, Any]:
         p = hub.store.account_path(account_id)
@@ -938,6 +1105,12 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
                                 hub.push_event(f"[{aid}] Ошибка входа: {exc}", "error")
                                 hub.step_job(jid)
                                 continue
+                        if req.auto_clean_posts and acc.authenticated and acc.device:
+                            try:
+                                del_cnt = await pipeline.delete_all_account_posts(acc)
+                                hub.push_event(f"[{aid}] 🗑 Удалено старых постов: {del_cnt}", "success", kind="audit_updated")
+                            except Exception as exc:
+                                hub.push_event(f"[{aid}] Ошибка очистки постов: {exc}", "error")
                         if req.auto_appeal and acc.authenticated and acc.device:
                             try:
                                 s = await remove_account_restrictions(acc, hide_rejected=req.hide_rejected)
@@ -954,7 +1127,7 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
             finally:
                 hub.end_job(jid)
 
-        if req.auto_login or req.auto_appeal:
+        if req.auto_login or req.auto_clean_posts or req.auto_appeal:
             asyncio.create_task(_bg_pipeline())
 
         return {"ok": True, "imported": imported_ids}
@@ -1041,6 +1214,9 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
         music_search: str = Form(""),
         skip_warmup: bool = Form(False),
         force_cooldown: bool = Form(True),
+        delete_old_posts: bool = Form(False),
+        appeal_after_upload: bool = Form(False),
+        settle_after_upload: bool = Form(True),
     ) -> dict[str, Any]:
         if not files:
             raise HTTPException(status_code=400, detail="Файлы не выбраны.")
@@ -1074,7 +1250,12 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
                     )
                     try:
                         acc, rec = await pipeline.execute_upload_task(
-                            task, force_cooldown=force_cooldown, skip_warmup=skip_warmup
+                            task,
+                            force_cooldown=force_cooldown,
+                            skip_warmup=skip_warmup,
+                            delete_old_posts=delete_old_posts,
+                            appeal_after_upload=appeal_after_upload,
+                            settle_after_upload=settle_after_upload,
                         )
                         hub.push_event(
                             f"[{acc.account_id}] Успешно залит пост! aweme_id={rec.aweme_id}",
@@ -1247,6 +1428,11 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
             async with KintaroClient(hub.cfg) as client:
                 pipeline = AutomationPipeline(hub.cfg, hub.store, client)
                 deleted = await pipeline.delete_all_account_posts(acc)
+            if account_id in hub.audit_cache:
+                hub.audit_cache[account_id]["post_penalties"] = []
+                hub.audit_cache[account_id]["total_posts"] = 0
+                hub.audit_cache[account_id]["total_views"] = 0
+                hub._save_audit_cache()
             hub.push_event(f"[{account_id}] 🗑 Удалено старых постов: {deleted}", "success", kind="audit_updated")
             return {"ok": True, "account_id": account_id, "deleted": deleted}
         finally:
@@ -1255,7 +1441,8 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
 
     @app.post("/api/campaign/run")
     async def run_campaign_api(
-        files: list[UploadFile] = File(...),
+        files: list[UploadFile] = File(default=[]),
+        server_media_files: str = Form(""),
         account_ids: str = Form(""),
         description: str = Form("#piratetoken #piratetokenshop #blackknight #pirateshop #fyp"),
         copies_count: int = Form(6),
@@ -1266,6 +1453,7 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
         region: str = Form("US"),
         app_locale: str = Form("en_US"),
         photo_mode: str = Form("minimal_snow"),
+        uniquifier_json: str = Form(""),
         auto_music_query: str = Form("Fortnite"),
         randomize_tags: bool = Form(True),
         delete_old_posts: bool = Form(True),
@@ -1274,15 +1462,34 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
         pin_sticky_proxy: bool = Form(False),
         override_proxy_country: str = Form(""),
     ) -> dict[str, Any]:
-        if not files:
-            raise HTTPException(status_code=400, detail="Файлы не выбраны.")
-        tmp_dir = Path(tempfile.mkdtemp(prefix="kintaro_camp_"))
+        tmp_dir: Path | None = None
         saved_paths: list[str] = []
-        for uf in files:
-            suffix = Path(uf.filename or "slide.jpg").suffix.lower() or ".jpg"
-            dest = tmp_dir / f"{uuid.uuid4().hex[:8]}{suffix}"
-            dest.write_bytes(await uf.read())
-            saved_paths.append(str(dest))
+        if files:
+            tmp_dir = Path(tempfile.mkdtemp(prefix="kintaro_camp_"))
+            for uf in files:
+                if not uf.filename:
+                    continue
+                suffix = Path(uf.filename).suffix.lower() or ".jpg"
+                dest = tmp_dir / f"{uuid.uuid4().hex[:8]}{suffix}"
+                dest.write_bytes(await uf.read())
+                saved_paths.append(str(dest))
+        if not saved_paths and server_media_files.strip():
+            mdir = Path(hub.cfg.state_dir) / "media"
+            for name in [x.strip() for x in server_media_files.split(",") if x.strip()]:
+                fp = mdir / Path(name).name
+                if fp.is_file():
+                    saved_paths.append(str(fp))
+        if not saved_paths:
+            raise HTTPException(status_code=400, detail="Файлы не выбраны (загрузи или выбери из медиа-библиотеки).")
+
+        uniq_overrides: dict[str, Any] = {}
+        if uniquifier_json.strip():
+            try:
+                parsed_u = json.loads(uniquifier_json)
+                if isinstance(parsed_u, dict):
+                    uniq_overrides = parsed_u
+            except Exception:
+                pass
 
         is_video = Path(saved_paths[0]).suffix.lower() == ".mp4"
         targets = [x.strip() for x in account_ids.split(",") if x.strip()]
@@ -1304,6 +1511,7 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
             override_proxy_country=override_proxy_country,
             delete_old_posts=delete_old_posts,
             photo_mode=photo_mode,
+            uniquifier_overrides=uniq_overrides,
             auto_music_query=auto_music_query,
             auto_appeal_2048=auto_appeal_2048,
             appeal_quiet_window_sec=appeal_quiet_window_sec,
@@ -1323,6 +1531,11 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
                             hub.step_job(jid) if meta.get("status") in ("completed", "partial", "error", "upload_failed") else None,
                         ),
                     )
+                rep_file = Path(hub.cfg.state_dir) / "last_campaign_report.json"
+                rep_file.write_text(
+                    json.dumps([r.model_dump(mode="json") for r in results], indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
                 ok_n = sum(1 for r in results if r.status == "completed")
                 tot_p = sum(r.posts_published for r in results)
                 tot_a = sum(r.appeals_sent for r in results)
@@ -1334,11 +1547,130 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
             except Exception as exc:
                 hub.push_event(f"❌ Ошибка кампании: {exc}", "error")
             finally:
+                if tmp_dir is not None:
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
                 hub.end_job(jid)
 
         asyncio.create_task(_bg_campaign())
         return {"ok": True, "started": True, "job_id": jid, "accounts": total_accs}
 
+    @app.get("/api/campaign/last-report")
+    async def get_last_campaign_report() -> JSONResponse:
+        rep_file = Path(hub.cfg.state_dir) / "last_campaign_report.json"
+        if not rep_file.is_file():
+            return JSONResponse([])
+        return JSONResponse(json.loads(rep_file.read_text(encoding="utf-8")))
+
+    @app.post("/api/presets/save")
+    async def save_preset_api(preset: dict[str, Any]) -> dict[str, Any]:
+        items = save_campaign_preset(Path(hub.cfg.state_dir), preset)
+        return {"ok": True, "campaign_presets": items}
+
+    @app.delete("/api/presets/{preset_id}")
+    async def delete_preset_api(preset_id: str) -> dict[str, Any]:
+        items = delete_campaign_preset(Path(hub.cfg.state_dir), preset_id)
+        return {"ok": True, "campaign_presets": items}
+
+    # ── Server Media Library (`state/media/`) ────────────────────────────────
+    @app.get("/api/media")
+    async def list_media_api() -> dict[str, Any]:
+        return {"ok": True, "files": list_media_library(Path(hub.cfg.state_dir))}
+
+    @app.post("/api/media/upload")
+    async def upload_media_library_api(files: list[UploadFile] = File(...)) -> dict[str, Any]:
+        saved: list[str] = []
+        sdir = Path(hub.cfg.state_dir)
+        for uf in files:
+            data = await uf.read()
+            if data:
+                saved.append(save_media_bytes(sdir, uf.filename or "creative.jpg", data))
+        return {"ok": True, "saved": saved, "files": list_media_library(sdir)}
+
+    @app.get("/api/media/file/{filename}")
+    async def get_media_file_api(filename: str) -> FileResponse:
+        fp = Path(hub.cfg.state_dir) / "media" / Path(filename).name
+        if not fp.is_file():
+            raise HTTPException(status_code=404, detail="Файл не найден")
+        return FileResponse(fp)
+
+    @app.delete("/api/media/{filename}")
+    async def delete_media_api(filename: str) -> dict[str, Any]:
+        ok = delete_media_file(Path(hub.cfg.state_dir), filename)
+        return {"ok": ok, "files": list_media_library(Path(hub.cfg.state_dir))}
+
+    # ── Sorted Folders & Bulk Session / CSV Exports ──────────────────────────
+    @app.get("/api/folders")
+    async def list_sorted_folders_api() -> dict[str, Any]:
+        return {"ok": True, "folders": get_sorted_folders_summary(Path(hub.cfg.state_dir))}
+
+    @app.get("/api/folders/{folder_key}/export")
+    async def export_sorted_folder_api(folder_key: str, fmt: str = "txt") -> Response:
+        spec = SORTED_FOLDER_SPECS.get(folder_key)
+        if not spec:
+            raise HTTPException(status_code=404, detail="Неизвестная папка")
+        sdir = Path(hub.cfg.state_dir)
+        if fmt == "zip":
+            raw_zip = export_sorted_folder_zip(sdir, folder_key)
+            return Response(
+                content=raw_zip,
+                media_type="application/zip",
+                headers={"Content-Disposition": f'attachment; filename="{folder_key}_accounts.zip"'},
+            )
+        txt_path = sdir / "sorted_accounts" / folder_key / spec["filename"]
+        txt_body = txt_path.read_text(encoding="utf-8") if txt_path.is_file() else ""
+        return Response(
+            content=txt_body.encode("utf-8"),
+            media_type="text/plain; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{spec["filename"]}"'},
+        )
+
+    @app.get("/api/sessions/export/zip")
+    async def export_sessions_zip_api() -> Response:
+        return Response(
+            content=export_all_sessions_zip(hub.store),
+            media_type="application/zip",
+            headers={"Content-Disposition": 'attachment; filename="kintaro_sessions.zip"'},
+        )
+
+    @app.get("/api/sessions/export/jsonl")
+    async def export_sessions_jsonl_api() -> Response:
+        return Response(
+            content=export_all_sessions_jsonl(hub.store),
+            media_type="application/x-ndjson",
+            headers={"Content-Disposition": 'attachment; filename="sessions.jsonl"'},
+        )
+
+    @app.post("/api/sessions/import-raw")
+    async def import_raw_sessions_api(req: RawSessionsImportRequest) -> dict[str, Any]:
+        px = normalize_proxy_url(req.default_proxy) if req.default_proxy.strip() else hub.default_proxy()
+        if not px:
+            raise HTTPException(status_code=400, detail="Укажи дефолтный прокси для импортируемых сессий.")
+        imported = import_raw_sessions_text(hub.store, req.raw_text, default_proxy=px, default_region=req.default_region)
+        hub.push_event(f"📥 Импортировано сырых x-device сессий: {len(imported)}", "success", kind="audit_updated")
+        return {"ok": True, "imported": imported}
+
+    @app.get("/api/analytics/export.csv")
+    async def export_analytics_csv_api() -> Response:
+        accs = [hub.serialize_account(a) for a in hub.store.list_accounts()]
+        return Response(
+            content=export_analytics_csv(accs),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": 'attachment; filename="kintaro_analytics.csv"'},
+        )
+
+    @app.get("/api/system/info")
+    async def system_info_api() -> dict[str, Any]:
+        import platform as _plat
+        return {
+            "ok": True,
+            "os": _plat.system(),
+            "release": _plat.release(),
+            "python": _plat.python_version(),
+            "chromium_found": find_chromium_executable() or "playwright_bundled",
+            "ffmpeg_found": bool(shutil.which(hub.cfg.uniquifier.ffmpeg_bin)),
+        }
+
+    # ── Spy Cloner, Top-Comment Pinning, Engagement Boost, Bulk Branding & Auto-Pilot ──
     @app.post("/api/spy")
     async def spy_api(req: SpyRequest) -> dict[str, Any]:
         acc = (
@@ -1351,6 +1683,143 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
         async with KintaroClient(hub.cfg) as client:
             data = await spy_competitor_profile(client, acc, req.username, count=req.count)
         return {"ok": True, "spy": data}
+
+    @app.post("/api/spy/download")
+    async def spy_download_api(req: SpyDownloadRequest) -> dict[str, Any]:
+        acc = (
+            hub.store.load_account(req.account_id)
+            if req.account_id.strip()
+            else next((a for a in hub.store.list_accounts() if a.authenticated), None)
+        )
+        if acc is None:
+            raise HTTPException(status_code=400, detail="Нет авторизованного аккаунта для скачивания крео.")
+        async with KintaroClient(hub.cfg) as client:
+            res = await download_creative_to_media(client, acc, req.target_post, Path(hub.cfg.state_dir))
+        hub.push_event(f"🕵️ Склонировано без водянок в библиотеку: {', '.join(res['saved_files'])}", "success")
+        return {"ok": True, **res}
+
+    @app.post("/api/comments/list")
+    async def comments_list_api(req: CommentsListRequest) -> dict[str, Any]:
+        acc = (
+            hub.store.load_account(req.account_id)
+            if req.account_id.strip()
+            else next((a for a in hub.store.list_accounts() if a.authenticated), None)
+        )
+        if acc is None:
+            raise HTTPException(status_code=400, detail="Нет авторизованного аккаунта.")
+        async with KintaroClient(hub.cfg) as client:
+            data = await fetch_post_comments_structured(client, acc, req.target_post, count=req.count)
+        return {"ok": True, **data}
+
+    @app.post("/api/comments/boost")
+    async def comments_boost_api(req: CommentsBoostRequest) -> dict[str, Any]:
+        jid = hub.start_job("💬 Вывод коммента в ТОП #1", total=1)
+        try:
+            async with KintaroClient(hub.cfg) as client:
+                res = await run_top_comment_boost(
+                    client,
+                    hub.store,
+                    target_post=req.target_post,
+                    seed_account_id=req.seed_account_id,
+                    lead_comment_text=req.lead_comment_text,
+                    existing_cid=req.existing_cid,
+                    booster_account_ids=req.booster_account_ids,
+                    reply_templates=req.reply_templates.splitlines(),
+                    reply_prob_pct=req.reply_prob_pct,
+                    threads=req.threads,
+                )
+            hub.push_event(
+                f"💬 Коммент {res['cid']} забущен: лайков={res['likes_ok']}/{res['boosters_total']}, ответов={res['replies_ok']}",
+                "success",
+            )
+            return {"ok": True, **res}
+        finally:
+            hub.step_job(jid)
+            hub.end_job(jid)
+
+    @app.post("/api/boost/run")
+    async def engagement_boost_api(req: EngagementBoostRequest) -> dict[str, Any]:
+        jid = hub.start_job("🔥 Взаимный буст поста/профиля", total=max(1, len(req.account_ids) or 1))
+        try:
+            async with KintaroClient(hub.cfg) as client:
+                res = await run_engagement_boost(
+                    client,
+                    hub.store,
+                    account_ids=req.account_ids or None,
+                    target_post=req.target_post,
+                    target_username=req.target_username,
+                    do_view=req.do_view,
+                    do_like=req.do_like,
+                    do_collect=req.do_collect,
+                    do_repost=req.do_repost,
+                    comments_lines=req.comments_text.splitlines(),
+                    threads=req.threads,
+                    log_fn=lambda m: hub.push_event(m, "info"),
+                )
+            hub.push_event(f"🔥 Буст завершён: успешно {res['success']}/{res['total']}", "success")
+            return {"ok": True, **res}
+        finally:
+            hub.end_job(jid)
+
+    @app.post("/api/branding/run")
+    async def bulk_branding_api(req: BrandingRequest) -> dict[str, Any]:
+        av_bytes: bytes | None = None
+        if req.avatar_data_url.strip():
+            durl = req.avatar_data_url.strip()
+            av_bytes = base64.b64decode(durl.split(",", 1)[1] if "," in durl else durl)
+        jid = hub.start_job("🎨 Массовый оформитель профилей", total=max(1, len(req.account_ids) or 1))
+        try:
+            async with KintaroClient(hub.cfg) as client:
+                res = await run_bulk_branding(
+                    client,
+                    hub.store,
+                    account_ids=req.account_ids or None,
+                    avatar_bytes=av_bytes,
+                    uniquify_avatar=req.uniquify_avatar,
+                    nickname_template=req.nickname_template,
+                    username_prefix=req.username_prefix,
+                    bio_template=req.bio_template,
+                    bio_url=req.bio_url,
+                    new_password=req.new_password,
+                    enable_totp=req.enable_totp,
+                    threads=req.threads,
+                    log_fn=lambda m: hub.push_event(m, "info"),
+                )
+            hub.push_event(f"🎨 Оформление завершено: успешно {res['success']}/{res['total']}", "success", kind="audit_updated")
+            return {"ok": True, **res}
+        finally:
+            hub.end_job(jid)
+
+    async def _autopilot_runner(job: ScheduledJob) -> None:
+        hub.push_event(f"⏰ Авто-Пилот запустил задачу `{job.action}` (#{job.id})...", "info")
+        try:
+            if job.action == "audit_all":
+                await audit_all()
+            elif job.action == "appeal_all":
+                await appeal_all(AppealRequest())
+            elif job.action == "shadow_check":
+                await check_shadows_api()
+        except Exception as exc:
+            hub.push_event(f"⏰ Ошибка Авто-Пилота `{job.action}`: {exc}", "warn")
+
+    autopilot = AutoPilotScheduler(_autopilot_runner)
+
+    @app.get("/api/autopilot")
+    async def list_autopilot_api() -> dict[str, Any]:
+        return {"ok": True, "jobs": autopilot.list_jobs()}
+
+    @app.post("/api/autopilot/add")
+    async def add_autopilot_api(req: AutoPilotAddRequest) -> dict[str, Any]:
+        if req.action not in ("audit_all", "appeal_all", "shadow_check"):
+            raise HTTPException(status_code=400, detail="Поддерживаются действия: audit_all, appeal_all, shadow_check")
+        j = autopilot.add_job(req.action, interval_minutes=req.interval_minutes, delay_minutes=req.delay_minutes, note=req.note)
+        hub.push_event(f"⏰ Авто-Пилот: добавлена задача `{j.action}` каждые {j.interval_minutes} мин", "success")
+        return {"ok": True, "job": j.to_dict(), "jobs": autopilot.list_jobs()}
+
+    @app.delete("/api/autopilot/{job_id}")
+    async def delete_autopilot_api(job_id: str) -> dict[str, Any]:
+        autopilot.delete_job(job_id)
+        return {"ok": True, "jobs": autopilot.list_jobs()}
 
     @app.post("/api/totp/generate")
     async def totp_generate_api(req: TotpRequest) -> dict[str, Any]:

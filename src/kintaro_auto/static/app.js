@@ -1,0 +1,928 @@
+let STATE = { accounts: [], active_jobs: [], shadows: [], watchdog: { enabled: false }, logs: [] };
+let ACTIVE_VIEW = 'fleet';
+let ACTIVE_FILTER = 'all';
+let VIEW_MODE = 'cards'; // 'cards' | 'table'
+let LOG_LEVEL = 'all';
+let DRAWER_ACCOUNT_ID = null;
+
+const SELECTED_IDS = new Set();
+const UPLOAD_TARGETS = new Set();
+let UPLOAD_FILES = [];
+let ALL_LOGS = [];
+let previewTimer = null;
+let spintaxTimer = null;
+
+const VIEW_TITLES = {
+  fleet: 'Флот аккаунтов и снятие огранов',
+  import: 'Пакетный импорт и Outlook Hub / TOTP вход',
+  upload: 'Студия анти-тень залива и уникализатор',
+  analytics: 'Радар теневых банов и аналитика Studio',
+  settings: 'Тестер прокси и живой config.toml',
+};
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function fmtTs(ts) {
+  if (!ts) return '—';
+  return new Date(ts * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+}
+
+function toast(msg, type = 'info') {
+  const stack = document.getElementById('toasts');
+  const el = document.createElement('div');
+  el.className = 'toast ' + (type === 'success' ? 'ok' : type);
+  el.textContent = msg;
+  stack.appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .25s'; setTimeout(() => el.remove(), 260); }, 4200);
+}
+
+async function apiJson(url, opts = {}) {
+  const r = await fetch(url, opts);
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.detail || ('HTTP ' + r.status));
+  return d;
+}
+
+async function apiPost(url, body = {}) {
+  return apiJson(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+// ── Navigation & Views ───────────────────────────────────────
+function switchView(name) {
+  ACTIVE_VIEW = name;
+  Object.keys(VIEW_TITLES).forEach(v => {
+    document.getElementById('view-' + v).classList.toggle('hidden', v !== name);
+  });
+  document.querySelectorAll('.nav-item').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.view === name);
+  });
+  document.getElementById('topTitle').textContent = VIEW_TITLES[name] || '';
+  if (name === 'analytics') renderAnalytics();
+  if (name === 'settings') loadConfig();
+  if (name === 'upload') renderUploadTargets();
+}
+
+function setFilter(f, btn) {
+  ACTIVE_FILTER = f;
+  document.querySelectorAll('#view-fleet .chip').forEach(c => c.classList.remove('active'));
+  btn.classList.add('active');
+  renderFleet();
+}
+
+function toggleViewMode() {
+  VIEW_MODE = VIEW_MODE === 'cards' ? 'table' : 'cards';
+  document.getElementById('btnViewMode').textContent = VIEW_MODE === 'cards' ? '☰ Таблица' : '⊞ Карточки';
+  renderFleet();
+}
+
+// ── State Sync & Rendering ───────────────────────────────────
+async function fetchState() {
+  STATE = await apiJson('/api/state');
+  renderAll();
+}
+
+function renderAll() {
+  const accs = STATE.accounts || [];
+  let authed = 0, elig = 0, app = 0, act = 0, views = 0, posts = 0;
+  accs.forEach(a => {
+    if (a.authenticated) authed++;
+    if (a.audit) {
+      views += (a.audit.total_views || 0);
+      posts += (a.audit.total_posts || 0);
+      if (a.audit.account_health === 'eligible') elig++;
+      else if (a.audit.account_health === 'appealing') app++;
+      else if (a.audit.account_health === 'action_required') act++;
+    }
+  });
+
+  document.getElementById('kpiTotal').textContent = accs.length;
+  document.getElementById('kpiAuthedSub').textContent = `${authed} авторизовано`;
+  document.getElementById('kpiEligible').textContent = elig;
+  document.getElementById('kpiAppealing').textContent = app;
+  document.getElementById('kpiAction').textContent = act;
+  document.getElementById('kpiViews').textContent = views.toLocaleString('ru-RU');
+  document.getElementById('kpiPostsSub').textContent = `${posts} постов в Studio`;
+  document.getElementById('navFleetCnt').textContent = accs.length;
+  document.getElementById('navViewsPill').textContent = views > 999 ? (views / 1000).toFixed(1) + 'k' : views;
+  document.getElementById('defProxyHint').textContent = STATE.default_proxy_masked || 'не задан';
+
+  // Active Jobs Pill
+  const jobs = STATE.active_jobs || [];
+  const jb = document.getElementById('jobsBadge');
+  if (jobs.length) {
+    const j0 = jobs[0];
+    document.getElementById('jobsText').textContent = `${j0.label} (${j0.done}/${j0.total})` + (jobs.length > 1 ? ` +${jobs.length - 1}` : '');
+    jb.classList.remove('hidden');
+  } else {
+    jb.classList.add('hidden');
+  }
+
+  // Watchdog Pill
+  const wd = STATE.watchdog || {};
+  document.getElementById('wdDot').className = 'dot' + (wd.enabled ? ' on' : '');
+  document.getElementById('wdStateTxt').textContent = wd.enabled ? `ON · #${wd.cycles}` : 'OFF';
+  document.getElementById('wdBtn').textContent = wd.enabled ? 'Остановить сторожа' : 'Включить сторожа';
+
+  // Clean deleted IDs from selection
+  const existingSet = new Set(accs.map(a => a.account_id));
+  for (const id of Array.from(SELECTED_IDS)) if (!existingSet.has(id)) SELECTED_IDS.delete(id);
+  updateBulkBar();
+
+  renderFleet();
+  if (ACTIVE_VIEW === 'upload') renderUploadTargets();
+  if (ACTIVE_VIEW === 'analytics') renderAnalytics();
+  if (DRAWER_ACCOUNT_ID) {
+    if (existingSet.has(DRAWER_ACCOUNT_ID)) renderDrawer();
+    else closeDrawer();
+  }
+}
+
+function getFilteredAccounts() {
+  const q = (document.getElementById('fleetSearch')?.value || '').trim().toLowerCase();
+  const sort = document.getElementById('fleetSort')?.value || 'views_desc';
+  let arr = (STATE.accounts || []).filter(a => {
+    if (ACTIVE_FILTER === 'unauth' && a.authenticated) return false;
+    if (ACTIVE_FILTER !== 'all' && ACTIVE_FILTER !== 'unauth') {
+      if (!a.authenticated || !a.audit || a.audit.account_health !== ACTIVE_FILTER) return false;
+    }
+    if (q) {
+      const hay = [a.account_id, a.username, a.email, a.audit?.uid, a.audit?.uniq_id, a.audit?.idc_gateway, a.audit?.reg_country, a.audit?.current_region]
+        .join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  const healthOrder = { action_required: 0, appealing: 1, eligible: 2 };
+  arr.sort((a, b) => {
+    if (sort === 'views_desc') return (b.audit?.total_views || 0) - (a.audit?.total_views || 0);
+    if (sort === 'health') {
+      const ha = a.audit ? (healthOrder[a.audit.account_health] ?? 3) : 4;
+      const hb = b.audit ? (healthOrder[b.audit.account_health] ?? 3) : 4;
+      return ha - hb;
+    }
+    return (a.username || a.account_id).localeCompare(b.username || b.account_id);
+  });
+  return arr;
+}
+
+function healthBadgeHtml(a) {
+  if (!a.authenticated) return `<span class="badge b-err">● Требуется вход</span>`;
+  if (!a.audit) return `<span class="badge b-neutral">Не проверен</span>`;
+  if (a.audit.account_health === 'eligible') return `<span class="badge b-ok">● ELIGIBLE</span>`;
+  if (a.audit.account_health === 'appealing') return `<span class="badge b-warn">● APPEALING</span>`;
+  return `<span class="badge b-err">● ACTION NEEDED</span>`;
+}
+
+function renderFleet() {
+  const box = document.getElementById('fleetContainer');
+  const list = getFilteredAccounts();
+  if (!list.length) {
+    box.innerHTML = `<div class="panel" style="text-align:center;color:var(--muted);padding:38px;">
+      Нет аккаунтов по текущему фильтру. Нажми «↻ HTTP-аудит всех» или добавь строки во вкладке «Импорт и Вход».
+    </div>`;
+    return;
+  }
+
+  if (VIEW_MODE === 'table') {
+    box.innerHTML = `<div class="panel" style="padding:0;overflow-x:auto;">
+      <table class="data-tbl">
+        <thead>
+          <tr>
+            <th style="width:34px;"></th>
+            <th>Аккаунт</th>
+            <th>Статус</th>
+            <th>Гео / Кластер</th>
+            <th>Прокси Exit</th>
+            <th>Посты / Views</th>
+            <th style="text-align:right;">Действия</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${list.map(a => {
+            const aud = a.audit;
+            const handle = aud?.uniq_id || a.username || a.account_id;
+            const checked = SELECTED_IDS.has(a.account_id) ? 'checked' : '';
+            return `<tr>
+              <td><input type="checkbox" class="chk" ${checked} onchange="toggleSelect('${esc(a.account_id)}')" /></td>
+              <td>
+                <div style="font-weight:700;cursor:pointer;" onclick="openDrawer('${esc(a.account_id)}')">@${esc(handle)}</div>
+                <div class="mono" style="font-size:11px;color:var(--muted)">${esc(aud?.uid || a.email || '—')}</div>
+              </td>
+              <td>${healthBadgeHtml(a)}</td>
+              <td class="mono" style="font-size:11.5px;">${aud ? `${esc(aud.reg_country||'?')}→${esc(aud.current_region||'?')} · ${esc(aud.idc_gateway.replace('https://api16-normal-',''))}` : esc(a.region)}</td>
+              <td class="mono" style="font-size:11.5px;">${aud?.proxy_country ? `<span class="badge b-ok">${esc(aud.proxy_country)} · ${esc(aud.proxy_ip)}</span>` : esc(a.proxy_masked)}</td>
+              <td class="mono">${aud ? `${aud.total_posts} · <strong>${aud.total_views.toLocaleString()}</strong>` : '—'}</td>
+              <td style="text-align:right;white-space:nowrap;">
+                <button class="btn btn-sm" onclick="openDrawer('${esc(a.account_id)}')">Инспектор</button>
+                ${a.authenticated ? `<button class="btn btn-sm" onclick="auditAccount('${esc(a.account_id)}')">↻</button>` : `<button class="btn btn-sm btn-primary" onclick="authAccount('${esc(a.account_id)}')">Войти</button>`}
+                ${a.authenticated ? `<button class="btn btn-sm btn-emerald" onclick="appealAccount('${esc(a.account_id)}')">⚡</button>` : ''}
+              </td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>`;
+    return;
+  }
+
+  box.innerHTML = `<div class="cards-grid">${list.map(a => {
+    const aud = a.audit;
+    const handle = aud?.uniq_id || a.username || a.account_id;
+    const sel = SELECTED_IDS.has(a.account_id);
+    const avHtml = aud?.avatar_url ? `<img src="${esc(aud.avatar_url)}" alt="" />` : esc(handle.slice(0, 2).toUpperCase());
+    const idc = aud?.idc_gateway ? aud.idc_gateway.replace('https://api16-normal-', '') : '—';
+    const flagged = aud ? (aud.post_penalties || []).filter(p => p.appeal_status !== 2 || p.v2_can_appeal).length : 0;
+
+    let statusBanner = '';
+    if (aud) {
+      if ((aud.notice_violations || []).length) {
+        const v = aud.notice_violations[0];
+        statusBanner = `<div class="alert-strip ${v.can_appeal ? 'alert-err' : 'alert-warn'}">
+          <div>
+            <strong>${esc(v.title)}</strong> <span class="mono" style="opacity:.8">#${esc(v.punish_id)}</span><br/>
+            <span>${esc(v.status_label)} · Source: <code class="mono">${esc(v.punish_source || '—')}</code> ${v.appeal_id && v.appeal_id !== '0' ? '· AppealId: ' + esc(v.appeal_id) : ''}</span>
+          </div>
+          ${v.can_appeal ? `<button class="btn btn-sm btn-primary" onclick="appealAccount('${esc(a.account_id)}')">Снять</button>` : ''}
+        </div>`;
+      } else if ((aud.restored_notices || []).length) {
+        const r0 = aud.restored_notices[0];
+        statusBanner = `<div class="alert-strip alert-ok">
+          <span>✓ Огран снят: <strong>${esc(r0.title)}</strong> (${fmtTs(r0.create_time)})</span>
+        </div>`;
+      }
+      if (aud.region_warning_present) {
+        statusBanner += `<div class="alert-strip alert-warn" style="padding:6px 11px;font-size:11.5px;">
+          <span>⚠️ Архивная плашка <strong>Update your account region</strong> в инбоксе (сейчас трафик строго заперт в прокси).</span>
+        </div>`;
+      }
+    }
+
+    return `<div class="acc-card ${sel ? 'selected' : ''}">
+      <div class="acc-head">
+        <div class="acc-id">
+          <input type="checkbox" class="chk" ${sel ? 'checked' : ''} onchange="toggleSelect('${esc(a.account_id)}')" />
+          <div class="avatar" onclick="openDrawer('${esc(a.account_id)}')">${avHtml}</div>
+          <div>
+            <div class="acc-handle" onclick="openDrawer('${esc(a.account_id)}')">
+              <span class="handle-txt">@${esc(handle)}</span>
+              ${healthBadgeHtml(a)}
+              ${a.use_outlook_hub ? '<span class="badge b-cyan">Outlook Hub</span>' : ''}
+              ${a.has_totp ? '<span class="badge b-neutral">TOTP</span>' : ''}
+            </div>
+            <div class="acc-sub mono">
+              <span>UID: ${esc(aud?.uid || '—')}</span> ·
+              <span>${esc(idc)}</span> ·
+              <span>Гео: ${aud ? `${esc(aud.reg_country||'?')}→${esc(aud.current_region||'?')}` : esc(a.region)}</span>
+            </div>
+          </div>
+        </div>
+        <button class="btn btn-sm" onclick="openDrawer('${esc(a.account_id)}')">Открыть ↗</button>
+      </div>
+
+      ${aud ? `<div class="tele-row">
+        <div class="tele-box">
+          <div class="tele-lbl">Exit Proxy</div>
+          <div class="mono" style="color:var(--ok);font-weight:600;">${aud.proxy_country ? `${esc(aud.proxy_country)} · ${esc(aud.proxy_ip)}` : 'OK'}</div>
+        </div>
+        <div class="tele-box">
+          <div class="tele-lbl">TikTok Studio</div>
+          <div>Постов: <strong>${aud.total_posts}</strong> · Views: <strong class="mono">${aud.total_views.toLocaleString()}</strong></div>
+        </div>
+        <div class="tele-box">
+          <div class="tele-lbl">Флаги постов</div>
+          <div style="font-weight:600;color:${flagged ? 'var(--err)' : 'var(--ok)'}">${flagged ? flagged + ' с флагом FYP' : 'Чисто (0)'}</div>
+        </div>
+      </div>` : ''}
+
+      ${statusBanner}
+
+      <div class="card-foot">
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          ${!a.authenticated ? `<button class="btn btn-sm btn-primary" onclick="authAccount('${esc(a.account_id)}')">🔑 Войти</button>` : ''}
+          ${a.authenticated ? `<button class="btn btn-sm" onclick="auditAccount('${esc(a.account_id)}')">↻ Аудит</button>` : ''}
+          ${a.authenticated ? `<button class="btn btn-sm btn-emerald" onclick="appealAccount('${esc(a.account_id)}')">⚡ Снять ограны</button>` : ''}
+          ${a.authenticated ? `<button class="btn btn-sm" onclick="warmupAccount('${esc(a.account_id)}')">🔥 Прогрев</button>` : ''}
+        </div>
+        <span class="mono" style="font-size:11px;color:var(--muted);">${aud?.audited_at ? 'обновлено ' + aud.audited_at : ''}</span>
+      </div>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+// ── Multi-Select & Bulk Actions ──────────────────────────────
+function toggleSelect(aid) {
+  if (SELECTED_IDS.has(aid)) SELECTED_IDS.delete(aid); else SELECTED_IDS.add(aid);
+  updateBulkBar();
+  renderFleet();
+}
+function toggleSelectAll() {
+  const visible = getFilteredAccounts().map(a => a.account_id);
+  const allSelected = visible.every(id => SELECTED_IDS.has(id));
+  if (allSelected) visible.forEach(id => SELECTED_IDS.delete(id));
+  else visible.forEach(id => SELECTED_IDS.add(id));
+  updateBulkBar();
+  renderFleet();
+}
+function clearSelection() {
+  SELECTED_IDS.clear();
+  updateBulkBar();
+  renderFleet();
+}
+function updateBulkBar() {
+  const bar = document.getElementById('bulkBar');
+  document.getElementById('bulkCount').textContent = SELECTED_IDS.size;
+  bar.classList.toggle('hidden', SELECTED_IDS.size === 0);
+}
+async function runBulk(action, extra = {}) {
+  const ids = Array.from(SELECTED_IDS);
+  if (!ids.length) return;
+  if (action === 'delete' && !confirm(`Удалить ${ids.length} выбранных аккаунтов?`)) return;
+  try {
+    await apiPost('/api/bulk-action', {
+      account_ids: ids,
+      action,
+      hide_rejected: document.getElementById('chkHideRejected').checked,
+      ...extra,
+    });
+    toast(`Пакетная задача «${action}» запущена (${ids.length} акк.)`, 'success');
+    if (action === 'delete') clearSelection();
+  } catch (e) { toast(e.message, 'err'); }
+}
+function promptBulkProxy() {
+  const px = prompt('Введи новый прокси для выбранных аккаунтов (socks5://... или ip:port:user:pass):');
+  if (px && px.trim()) runBulk('set_proxy', { proxy: px.trim() });
+}
+
+// ── Slide-Over Account Inspector Drawer ──────────────────────
+function openDrawer(aid) {
+  DRAWER_ACCOUNT_ID = aid;
+  document.getElementById('drawerBackdrop').classList.remove('hidden');
+  renderDrawer();
+}
+function closeDrawer() {
+  DRAWER_ACCOUNT_ID = null;
+  document.getElementById('drawerBackdrop').classList.add('hidden');
+}
+
+function renderDrawer() {
+  const a = (STATE.accounts || []).find(x => x.account_id === DRAWER_ACCOUNT_ID);
+  if (!a) return;
+  const aud = a.audit;
+  const handle = aud?.uniq_id || a.username || a.account_id;
+
+  document.getElementById('drawerTitleGroup').innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;">
+      <strong style="font-size:16px;">@${esc(handle)}</strong>
+      ${healthBadgeHtml(a)}
+    </div>
+    <div class="mono" style="font-size:11.5px;color:var(--muted);margin-top:3px;">
+      UID: ${esc(aud?.uid || '—')} · ${esc(a.email || 'без email')} · Кластер: ${esc(aud?.idc_gateway || '—')}
+    </div>`;
+
+  const maxViews = Math.max(1, ...(aud?.post_penalties || []).map(p => p.play_count || 0));
+
+  document.getElementById('drawerBody').innerHTML = `
+    <!-- Quick Actions -->
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      ${!a.authenticated ? `<button class="btn btn-sm btn-primary" onclick="authAccount('${esc(a.account_id)}')">🔑 Авторизоваться</button>` : ''}
+      ${a.authenticated ? `<button class="btn btn-sm" onclick="auditAccount('${esc(a.account_id)}')">↻ Обновить аудит</button>` : ''}
+      ${a.authenticated ? `<button class="btn btn-sm btn-emerald" onclick="appealAccount('${esc(a.account_id)}')">⚡ Снять все ограны</button>` : ''}
+      ${a.authenticated ? `<button class="btn btn-sm" onclick="warmupAccount('${esc(a.account_id)}')">🔥 Прогреть ленту</button>` : ''}
+      <button class="btn btn-sm" onclick="syncGeo('${esc(a.account_id)}','US')">🌎 Sync US SIM</button>
+      ${a.use_outlook_hub ? `<button class="btn btn-sm btn-amber" onclick="fetchOutlookOtp('${esc(a.account_id)}')">📬 Прочитать Outlook OTP</button>` : ''}
+      ${a.authenticated ? `<a class="btn btn-sm" href="/api/accounts/${encodeURIComponent(a.account_id)}/export?mode=cookies" style="text-decoration:none;">⬇ cookies.json</a>` : ''}
+      ${a.authenticated ? `<a class="btn btn-sm" href="/api/accounts/${encodeURIComponent(a.account_id)}/export?mode=session" style="text-decoration:none;">⬇ x-device.json</a>` : ''}
+    </div>
+
+    <!-- Proxy Shield Editor -->
+    <div class="sec-box">
+      <div class="sec-title">
+        <span>Прокси и Exit-Node</span>
+        <span class="mono" style="color:var(--ok)">${aud?.proxy_country ? `${esc(aud.proxy_country)} · ${esc(aud.proxy_ip)}` : esc(a.proxy_masked)}</span>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <input type="text" id="drProxyIn" placeholder="Заменить прокси (socks5://... или ip:port:user:pass)" />
+        <button class="btn btn-sm btn-primary" style="white-space:nowrap;" onclick="saveDrawerProxy('${esc(a.account_id)}')">Проверить и сохранить</button>
+      </div>
+    </div>
+
+    <!-- Profile / Bio Editor -->
+    ${a.authenticated ? `<div class="sec-box">
+      <div class="sec-title"><span>Редактор профиля TikTok (Kintaro API)</span></div>
+      <div class="grid-2" style="margin-bottom:8px;">
+        <input type="text" id="drNick" placeholder="Новый Nickname (опц.)" value="${esc(aud?.nickname || '')}" />
+        <input type="text" id="drBioUrl" placeholder="Ссылка в Bio (опц.)" />
+      </div>
+      <div style="display:flex;gap:8px;">
+        <input type="text" id="drBio" placeholder="Текст нового Bio..." />
+        <button class="btn btn-sm btn-emerald" style="white-space:nowrap;" onclick="saveDrawerProfile('${esc(a.account_id)}')">Обновить Bio</button>
+      </div>
+    </div>` : ''}
+
+    <!-- Studio Posts Table -->
+    <div class="sec-box">
+      <div class="sec-title">
+        <span>Посты в TikTok Studio (${aud?.total_posts || 0})</span>
+        <span class="mono" style="color:var(--accent-2)">Всего: ${(aud?.total_views || 0).toLocaleString()} views</span>
+      </div>
+      ${aud && (aud.post_penalties || []).length ? `<div style="overflow-x:auto;">
+        <table class="data-tbl">
+          <thead><tr><th>Пост</th><th>Просмотры</th><th>Статус FYP</th><th style="text-align:right">Видимость</th></tr></thead>
+          <tbody>
+            ${aud.post_penalties.map(p => {
+              const pct = Math.max(4, Math.round(((p.play_count || 0) / maxViews) * 100));
+              const isOk = p.appeal_status === 2 && !p.v2_can_appeal;
+              return `<tr>
+                <td>
+                  <a href="https://www.tiktok.com/@${esc(handle)}/video/${esc(p.item_id)}" target="_blank" class="mono" style="color:#93c5fd;text-decoration:none;font-size:11.5px;">${esc(p.item_id)} ↗</a>
+                  <div style="font-size:11px;color:var(--muted);max-width:240px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(p.desc || '<без описания>')}</div>
+                </td>
+                <td style="min-width:110px;">
+                  <div class="mono" style="font-weight:600;font-size:12px;">${(p.play_count || 0).toLocaleString()}</div>
+                  <div class="bar-track" style="height:5px;margin-top:4px;"><div class="bar-fill" style="width:${pct}%"></div></div>
+                </td>
+                <td>${isOk ? '<span class="badge b-ok">OK</span>' : `<span class="badge b-err">${esc(p.appeal_status_label)} ${esc((p.reason_labels||[]).join(','))}</span>`}</td>
+                <td style="text-align:right;white-space:nowrap;">
+                  <button class="btn btn-sm" onclick="setPostVis('${esc(a.account_id)}','${esc(p.item_id)}',true)">Private</button>
+                  <button class="btn btn-sm btn-ghost" onclick="setPostVis('${esc(a.account_id)}','${esc(p.item_id)}',false)">Public</button>
+                </td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>` : `<div style="color:var(--muted);font-size:12px;">Нажми «Обновить аудит», чтобы загрузить список постов из TikTok Studio.</div>`}
+    </div>
+
+    <!-- Recent Logins Timeline -->
+    ${aud && (aud.recent_device_logins || []).length ? `<div class="sec-box">
+      <div class="sec-title"><span>История входов из системных уведомлений</span></div>
+      <div style="display:flex;flex-direction:column;gap:7px;font-size:12px;color:var(--text-dim);">
+        ${aud.recent_device_logins.map(lg => `<div style="padding-left:10px;border-left:2px solid var(--border-strong);">${esc(lg)}</div>`).join('')}
+      </div>
+    </div>` : ''}
+  `;
+}
+
+// ── Single-Account Actions ───────────────────────────────────
+async function auditAll() {
+  const b = document.getElementById('btnAuditAll'); b.disabled = true;
+  try { await apiPost('/api/audit-all'); toast('HTTP-аудит всех аккаунтов завершён', 'success'); await fetchState(); }
+  catch (e) { toast(e.message, 'err'); } finally { b.disabled = false; }
+}
+async function appealAll() {
+  const b = document.getElementById('btnAppealAll'); b.disabled = true;
+  try { await apiPost('/api/appeal-all', { hide_rejected: document.getElementById('chkHideRejected').checked }); toast('Массовое снятие огранов завершено', 'success'); await fetchState(); }
+  catch (e) { toast(e.message, 'err'); } finally { b.disabled = false; }
+}
+async function auditAccount(aid) {
+  try { await apiPost(`/api/accounts/${encodeURIComponent(aid)}/audit`); toast(`Аудит @${aid} обновлён`, 'success'); await fetchState(); }
+  catch (e) { toast(e.message, 'err'); }
+}
+async function appealAccount(aid) {
+  try { await apiPost(`/api/accounts/${encodeURIComponent(aid)}/appeal`, { hide_rejected: document.getElementById('chkHideRejected').checked }); toast(`Проверка и снятие огранов @${aid} завершены`, 'success'); await fetchState(); }
+  catch (e) { toast(e.message, 'err'); }
+}
+async function authAccount(aid) {
+  toast(`Запуск входа @${aid}...`, 'info');
+  try { await apiPost(`/api/accounts/${encodeURIComponent(aid)}/auth`); toast(`@${aid} успешно авторизован!`, 'success'); await fetchState(); }
+  catch (e) { toast(e.message, 'err'); }
+}
+async function warmupAccount(aid) {
+  toast(`Запуск прогрева @${aid}...`, 'info');
+  try { await apiPost(`/api/accounts/${encodeURIComponent(aid)}/warmup`); toast(`Прогрев @${aid} завершён`, 'success'); await fetchState(); }
+  catch (e) { toast(e.message, 'err'); }
+}
+async function syncGeo(aid, reg) {
+  try { await apiPost(`/api/accounts/${encodeURIComponent(aid)}/sync-geo`, { region: reg }); toast(`SIM/GEO @${aid} → ${reg}`, 'success'); await fetchState(); }
+  catch (e) { toast(e.message, 'err'); }
+}
+async function saveDrawerProxy(aid) {
+  const px = document.getElementById('drProxyIn').value.trim();
+  if (!px) return toast('Введи строку прокси', 'warn');
+  try {
+    const r = await apiPost(`/api/accounts/${encodeURIComponent(aid)}/proxy`, { proxy: px });
+    toast(`Прокси проверен: ${r.country} · ${r.ip} (${r.latency_ms}мс)`, 'success');
+    await fetchState();
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function saveDrawerProfile(aid) {
+  try {
+    const r = await apiPost(`/api/accounts/${encodeURIComponent(aid)}/profile`, {
+      nickname: document.getElementById('drNick').value,
+      bio: document.getElementById('drBio').value,
+      bio_url: document.getElementById('drBioUrl').value,
+    });
+    toast(r.message, 'success');
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function fetchOutlookOtp(aid) {
+  toast(`Чтение кода из Outlook Hub для @${aid}...`, 'info');
+  try {
+    const r = await apiPost(`/api/accounts/${encodeURIComponent(aid)}/outlook-otp`);
+    navigator.clipboard?.writeText(r.code).catch(() => {});
+    toast(`Код TikTok: ${r.code} (скопирован в буфер!)`, 'success');
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function setPostVis(aid, itemId, priv) {
+  try {
+    const r = await apiPost(`/api/accounts/${encodeURIComponent(aid)}/posts/${encodeURIComponent(itemId)}/visibility`, { private: priv });
+    toast(r.message, 'success');
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function toggleWatchdog() {
+  const next = !(STATE.watchdog && STATE.watchdog.enabled);
+  await apiPost('/api/watchdog', { enabled: next, hide_rejected: document.getElementById('chkHideRejected').checked });
+  toast(next ? 'Сторож 24/7 запущен' : 'Сторож остановлен', next ? 'success' : 'warn');
+  await fetchState();
+}
+
+// ── Smart Batch Import + Live Parser Preview ─────────────────
+function loadTxtFile(ev) {
+  const f = ev.target.files[0];
+  if (!f) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    document.getElementById('impLines').value = reader.result || '';
+    scheduleLinePreview();
+    toast(`Загружен файл ${f.name}`, 'success');
+  };
+  reader.readAsText(f);
+}
+
+function scheduleLinePreview() {
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(runLinePreview, 250);
+}
+
+async function runLinePreview() {
+  const lines_text = document.getElementById('impLines').value;
+  const proxies_text = document.getElementById('impProxies').value;
+  const region = document.getElementById('impRegion').value;
+  if (!lines_text.trim()) {
+    document.getElementById('previewCountBadge').textContent = '0 валидных';
+    document.getElementById('previewTableBox').innerHTML = 'Вставь строки слева для мгновенного разбора.';
+    return;
+  }
+  try {
+    const r = await apiPost('/api/preview-lines', { lines_text, proxies_text, region });
+    document.getElementById('previewCountBadge').textContent = `${r.valid_count} / ${r.rows.length} валидных`;
+    document.getElementById('previewTableBox').innerHTML = `<table class="data-tbl">
+      <thead><tr><th>Аккаунт</th><th>Формат</th><th>2FA</th><th>Прокси</th></tr></thead>
+      <tbody>${r.rows.map(x => x.ok
+        ? `<tr><td class="mono">${esc(x.account_id)}</td><td><span class="badge b-cyan">${esc(x.format)}</span></td><td>${x.has_2fa ? '✓' : '—'}</td><td class="mono" style="font-size:11px;">${esc(x.proxy_masked)}</td></tr>`
+        : `<tr><td colspan="4" style="color:var(--err)">✕ ${esc(x.raw)} — ${esc(x.error)}</td></tr>`
+      ).join('')}</tbody>
+    </table>`;
+  } catch (e) { /* ignore transient typing */ }
+}
+
+async function submitBatchImport() {
+  try {
+    const r = await apiPost('/api/import-batch', {
+      lines_text: document.getElementById('impLines').value,
+      proxies_text: document.getElementById('impProxies').value,
+      region: document.getElementById('impRegion').value,
+      auto_login: document.getElementById('impAutoLogin').checked,
+      auto_appeal: document.getElementById('impAutoAppeal').checked,
+      hide_rejected: document.getElementById('chkHideRejected').checked,
+    });
+    toast(`Импортировано ${r.imported.length} акк. Конвейер запущен в фоне!`, 'success');
+    document.getElementById('impLines').value = '';
+    switchView('fleet');
+    await fetchState();
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function submitFolderImport() {
+  const folder_path = document.getElementById('folderPathInput').value.trim();
+  if (!folder_path) return toast('Укажи путь к папке сессий', 'warn');
+  try {
+    const r = await apiPost('/api/import-folder', {
+      folder_path,
+      proxy: document.getElementById('impProxies').value.split('\n')[0] || '',
+      region: document.getElementById('impRegion').value,
+    });
+    toast(`Импортировано готовых сессий: ${r.imported.length}`, 'success');
+    switchView('fleet');
+    await fetchState();
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+// ── Upload Studio: Media Dropzone + Spintax + Fan-Out ────────
+function handleMediaFiles(fileList) {
+  for (const f of fileList) UPLOAD_FILES.push(f);
+  renderMediaThumbs();
+}
+function removeMediaFile(idx) {
+  UPLOAD_FILES.splice(idx, 1);
+  renderMediaThumbs();
+}
+function renderMediaThumbs() {
+  const box = document.getElementById('mediaThumbs');
+  box.innerHTML = UPLOAD_FILES.map((f, i) => {
+    const url = URL.createObjectURL(f);
+    const isVid = f.name.toLowerCase().endsWith('.mp4');
+    const kb = (f.size / 1024).toFixed(0) + ' КБ';
+    return `<div class="thumb">
+      ${isVid ? `<video src="${url}" muted></video>` : `<img src="${url}" alt="" />`}
+      <button class="thumb-rm" onclick="removeMediaFile(${i})">✕</button>
+      <div class="thumb-meta mono">${isVid ? 'MP4' : 'IMG'} · ${kb}</div>
+    </div>`;
+  }).join('');
+}
+
+function scheduleSpintaxPreview() {
+  clearTimeout(spintaxTimer);
+  spintaxTimer = setTimeout(async () => {
+    const t = document.getElementById('upDesc').value;
+    if (!t.trim()) { document.getElementById('spintaxBox').innerHTML = ''; return; }
+    try {
+      const r = await apiPost('/api/spintax-preview', { template: t });
+      document.getElementById('spintaxBox').innerHTML = r.variants.map((v, i) =>
+        `<div style="font-size:11.5px;padding:6px 10px;border-radius:8px;background:rgba(255,255,255,0.03);border:1px solid var(--border);">
+          <span class="mono" style="color:var(--muted)">#${i + 1}</span> ${esc(v.text)}
+        </div>`
+      ).join('');
+    } catch (_) {}
+  }, 220);
+}
+
+function renderUploadTargets() {
+  const authed = (STATE.accounts || []).filter(a => a.authenticated);
+  const box = document.getElementById('uploadTargetsList');
+  if (!authed.length) {
+    box.innerHTML = `<div style="color:var(--muted);font-size:12px;">Нет авторизованных аккаунтов.</div>`;
+    return;
+  }
+  box.innerHTML = authed.map(a => {
+    const checked = UPLOAD_TARGETS.has(a.account_id) ? 'checked' : '';
+    return `<label style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-radius:11px;background:rgba(8,11,19,0.7);border:1px solid var(--border);cursor:pointer;">
+      <span style="display:flex;align-items:center;gap:9px;">
+        <input type="checkbox" class="chk" ${checked} onchange="toggleUploadTarget('${esc(a.account_id)}')" />
+        <strong>@${esc(a.audit?.uniq_id || a.username)}</strong>
+        ${healthBadgeHtml(a)}
+      </span>
+      <span class="mono" style="font-size:11px;color:var(--muted);">${esc(a.region)} · постов: ${a.audit?.total_posts ?? a.uploads_count}</span>
+    </label>`;
+  }).join('');
+}
+function toggleUploadTarget(aid) {
+  if (UPLOAD_TARGETS.has(aid)) UPLOAD_TARGETS.delete(aid); else UPLOAD_TARGETS.add(aid);
+}
+function toggleAllUploadTargets() {
+  const authed = (STATE.accounts || []).filter(a => a.authenticated).map(a => a.account_id);
+  const all = authed.every(id => UPLOAD_TARGETS.has(id));
+  if (all) UPLOAD_TARGETS.clear(); else authed.forEach(id => UPLOAD_TARGETS.add(id));
+  renderUploadTargets();
+}
+
+async function submitUpload() {
+  if (!UPLOAD_FILES.length) return toast('Перетащи или выбери MP4 / фото!', 'warn');
+  const fd = new FormData();
+  UPLOAD_FILES.forEach(f => fd.append('files', f));
+  fd.append('account_ids', Array.from(UPLOAD_TARGETS).join(','));
+  fd.append('description', document.getElementById('upDesc').value);
+  fd.append('music_search', document.getElementById('upMusic').value);
+  fd.append('skip_warmup', document.getElementById('upSkipWarmup').checked);
+  fd.append('force_cooldown', document.getElementById('upForceCooldown').checked);
+
+  const btn = document.getElementById('btnUpload'); btn.disabled = true;
+  try {
+    const r = await apiJson('/api/upload', { method: 'POST', body: fd });
+    const okCnt = r.results.filter(x => x.ok).length;
+    toast(`Залито успешно: ${okCnt} / ${r.results.length}`, okCnt ? 'success' : 'err');
+    UPLOAD_FILES = [];
+    renderMediaThumbs();
+    await fetchState();
+  } catch (e) { toast(e.message, 'err'); } finally { btn.disabled = false; }
+}
+
+// ── Analytics & Shadowban Radar ──────────────────────────────
+function renderAnalytics() {
+  const accs = (STATE.accounts || []).filter(a => a.audit);
+  const maxV = Math.max(1, ...accs.map(a => a.audit.total_views || 0));
+  document.getElementById('viewsBarChart').innerHTML = accs.length
+    ? accs.sort((a, b) => (b.audit.total_views || 0) - (a.audit.total_views || 0)).map(a => {
+        const pct = Math.max(2, Math.round(((a.audit.total_views || 0) / maxV) * 100));
+        return `<div class="bar-row">
+          <div class="mono" style="overflow:hidden;text-overflow:ellipsis;">@${esc(a.audit.uniq_id || a.username)}</div>
+          <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
+          <div class="mono" style="text-align:right;font-weight:600;">${(a.audit.total_views || 0).toLocaleString()}</div>
+        </div>`;
+      }).join('')
+    : '<div style="color:var(--muted);font-size:12px;">Сначала запусти HTTP-аудит для построения графиков.</div>';
+
+  // Pure SVG Donut for Health Distribution
+  let elig = 0, app = 0, act = 0, un = 0;
+  (STATE.accounts || []).forEach(a => {
+    if (!a.authenticated || !a.audit) un++;
+    else if (a.audit.account_health === 'eligible') elig++;
+    else if (a.audit.account_health === 'appealing') app++;
+    else act++;
+  });
+  const total = Math.max(1, elig + app + act + un);
+  const r = 56, C = 2 * Math.PI * r;
+  const segs = [
+    { val: elig, color: '#10b981', label: 'Eligible' },
+    { val: app, color: '#f59e0b', label: 'Appealing' },
+    { val: act, color: '#f43f5e', label: 'Action Needed' },
+    { val: un, color: '#475569', label: 'Ожидают' },
+  ];
+  let offset = 0;
+  const circles = segs.filter(s => s.val > 0).map(s => {
+    const len = (s.val / total) * C;
+    const svg = `<circle cx="72" cy="72" r="${r}" fill="none" stroke="${s.color}" stroke-width="15" stroke-dasharray="${len} ${C - len}" stroke-dashoffset="${-offset}" transform="rotate(-90 72 72)" />`;
+    offset += len;
+    return svg;
+  }).join('');
+
+  document.getElementById('healthDonutChart').innerHTML = `
+    <svg width="144" height="144" viewBox="0 0 144 144">
+      <circle cx="72" cy="72" r="${r}" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="15" />
+      ${circles}
+      <text x="72" y="70" text-anchor="middle" fill="#f1f5f9" font-size="22" font-weight="700">${(STATE.accounts || []).length}</text>
+      <text x="72" y="88" text-anchor="middle" fill="#64748b" font-size="10.5">ACCOUNTS</text>
+    </svg>
+    <div style="display:flex;flex-direction:column;gap:7px;font-size:12px;">
+      ${segs.map(s => `<div style="display:flex;align-items:center;gap:8px;">
+        <span style="width:10px;height:10px;border-radius:3px;background:${s.color};display:inline-block;"></span>
+        <span style="color:var(--text-dim)">${s.label}:</span> <strong>${s.val}</strong>
+      </div>`).join('')}
+    </div>`;
+
+  const sh = STATE.shadows || [];
+  if (sh.length) {
+    document.getElementById('shadowsTableBox').innerHTML = `<table class="data-tbl">
+      <thead><tr><th>Аккаунт</th><th>Aweme ID</th><th>Возраст (мин)</th><th>Просмотры</th><th>Публичен</th><th>Вердикт</th></tr></thead>
+      <tbody>${sh.map(x => `<tr>
+        <td>@${esc(x.account_id)}</td>
+        <td class="mono">${esc(x.aweme_id)}</td>
+        <td class="mono">${Number(x.age_minutes).toFixed(1)}</td>
+        <td class="mono">${x.play_count ?? '—'}</td>
+        <td>${x.found_in_public_get ? 'Да' : 'Нет'}</td>
+        <td><span class="badge ${x.suspected_shadowban ? 'b-err' : 'b-ok'}">${esc(x.verdict)}</span></td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+  }
+}
+
+async function runShadowCheck() {
+  const btn = document.getElementById('btnCheckShadows'); btn.disabled = true;
+  try {
+    await apiPost('/api/shadows/check');
+    toast('Радар теней завершён', 'success');
+    await fetchState();
+  } catch (e) { toast(e.message, 'err'); } finally { btn.disabled = false; }
+}
+
+// ── Proxy Tester & Config Editor ─────────────────────────────
+async function runProxyTest() {
+  const proxies_text = document.getElementById('proxyTestInput').value;
+  if (!proxies_text.trim()) return toast('Вставь хотя бы один прокси', 'warn');
+  const btn = document.getElementById('btnTestProxies'); btn.disabled = true;
+  try {
+    const r = await apiPost('/api/proxies/test', { proxies_text });
+    document.getElementById('proxyTestResults').innerHTML = `<table class="data-tbl">
+      <thead><tr><th>Прокси</th><th>GEO / IP</th><th>Пинг</th><th>Статус</th></tr></thead>
+      <tbody>${r.results.map(x => `<tr>
+        <td class="mono" style="font-size:11px;">${esc(x.proxy_masked)}</td>
+        <td class="mono">${x.ok ? `${esc(x.country)} · ${esc(x.ip)}` : '—'}</td>
+        <td class="mono">${x.ok ? x.latency_ms + ' мс' : '—'}</td>
+        <td>${x.ok ? '<span class="badge b-ok">OK</span>' : `<span class="badge b-err">${esc(x.error)}</span>`}</td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+  } catch (e) { toast(e.message, 'err'); } finally { btn.disabled = false; }
+}
+
+async function loadConfig() {
+  try {
+    const c = await apiJson('/api/config');
+    document.getElementById('cfgKeyBadge').textContent = c.has_api_key ? `API Key: ${c.api_key_masked}` : 'API Key не задан';
+    document.getElementById('cfgParallel').value = c.max_parallel_accounts;
+    document.getElementById('cfgDailyMax').value = c.max_posts_per_account_per_day;
+    document.getElementById('cfgAgeMin').value = c.min_session_age_minutes_before_first_post;
+    document.getElementById('cfgGapHours').value = c.min_hours_between_posts_per_account;
+    document.getElementById('cfgWarmupOn').checked = c.warmup_enabled;
+    document.getElementById('cfgUniqOn').checked = c.uniquifier_enabled;
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function saveConfig() {
+  try {
+    await apiPost('/api/config', {
+      api_key: document.getElementById('cfgApiKey').value || null,
+      max_parallel_accounts: Number(document.getElementById('cfgParallel').value),
+      max_posts_per_account_per_day: Number(document.getElementById('cfgDailyMax').value),
+      min_session_age_minutes_before_first_post: Number(document.getElementById('cfgAgeMin').value),
+      min_hours_between_posts_per_account: Number(document.getElementById('cfgGapHours').value),
+      warmup_enabled: document.getElementById('cfgWarmupOn').checked,
+      uniquifier_enabled: document.getElementById('cfgUniqOn').checked,
+    });
+    document.getElementById('cfgApiKey').value = '';
+    toast('config.toml успешно обновлён!', 'success');
+    await loadConfig();
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+// ── Command Palette (Ctrl+K) & Keyboard Shortcuts ────────────
+function openCmdK() {
+  document.getElementById('cmdkBackdrop').classList.remove('hidden');
+  const inp = document.getElementById('cmdkInput');
+  inp.value = '';
+  inp.focus();
+  renderCmdK();
+}
+function closeCmdK() { document.getElementById('cmdkBackdrop').classList.add('hidden'); }
+
+function renderCmdK() {
+  const q = (document.getElementById('cmdkInput').value || '').trim().toLowerCase();
+  const actions = [
+    { label: '↻ Запустить HTTP-аудит всех аккаунтов', hint: '0$ Kintaro', run: () => auditAll() },
+    { label: '⚡ Снять все ограны на всех аккаунтах', hint: '3-Channel', run: () => appealAll() },
+    { label: '🛡️ Переключить фонового сторожа Watchdog', hint: '95–165s', run: () => toggleWatchdog() },
+    { label: '📥 Открыть пакетный импорт / Outlook Hub', hint: 'View', run: () => switchView('import') },
+    { label: '🚀 Открыть студию анти-тень залива', hint: 'View', run: () => switchView('upload') },
+    { label: '📊 Открыть аналитику и радар теней', hint: 'View', run: () => switchView('analytics') },
+    { label: '⚙️ Открыть тестер прокси и config.toml', hint: 'View', run: () => switchView('settings') },
+  ];
+  (STATE.accounts || []).forEach(a => {
+    const h = a.audit?.uniq_id || a.username || a.account_id;
+    actions.push({ label: `Инспектор аккаунта @${h}`, hint: a.audit?.account_health || 'account', run: () => { switchView('fleet'); openDrawer(a.account_id); } });
+  });
+  const matches = actions.filter(x => !q || x.label.toLowerCase().includes(q) || x.hint.toLowerCase().includes(q));
+  document.getElementById('cmdkList').innerHTML = matches.map((m, idx) =>
+    `<button class="cmdk-item" data-idx="${idx}"><span>${esc(m.label)}</span><span class="mono" style="font-size:11px;color:var(--muted)">${esc(m.hint)}</span></button>`
+  ).join('');
+  document.querySelectorAll('.cmdk-item').forEach((el, i) => {
+    el.onclick = () => { closeCmdK(); matches[i].run(); };
+  });
+}
+
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openCmdK(); }
+  else if (e.key === 'Escape') { closeCmdK(); closeDrawer(); }
+  else if (e.key === '/' && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') {
+    e.preventDefault(); switchView('fleet'); document.getElementById('fleetSearch').focus();
+  }
+});
+
+// ── Filterable Live SSE Console ──────────────────────────────
+function setLogLevel(lvl, btn) {
+  LOG_LEVEL = lvl;
+  document.querySelectorAll('#consoleDock .chip').forEach(c => c.classList.remove('active'));
+  btn.classList.add('active');
+  renderConsole();
+}
+function clearConsole() { ALL_LOGS = []; renderConsole(); }
+function renderConsole() {
+  const box = document.getElementById('consoleBody');
+  const shown = ALL_LOGS.filter(x => LOG_LEVEL === 'all' || x.level === LOG_LEVEL);
+  box.innerHTML = shown.map(e =>
+    `<div class="log-line"><span class="log-ts">[${esc(e.time)}]</span><span class="log-${esc(e.level || 'info')}">${esc(e.text)}</span></div>`
+  ).join('');
+  box.scrollTop = box.scrollHeight;
+}
+
+// ── Drag & Drop Bindings + Boot ──────────────────────────────
+function bindDropzone(elId, onFiles) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  ['dragenter', 'dragover'].forEach(ev => el.addEventListener(ev, e => { e.preventDefault(); el.classList.add('drag'); }));
+  ['dragleave', 'drop'].forEach(ev => el.addEventListener(ev, e => { e.preventDefault(); el.classList.remove('drag'); }));
+  el.addEventListener('drop', e => { if (e.dataTransfer?.files?.length) onFiles(e.dataTransfer.files); });
+}
+
+(async function boot() {
+  bindDropzone('mediaDropzone', files => handleMediaFiles(files));
+  bindDropzone('txtDropzone', files => loadTxtFile({ target: { files } }));
+  await fetchState();
+  ALL_LOGS = (STATE.logs || []).slice();
+  renderConsole();
+
+  const es = new EventSource('/api/events');
+  es.onmessage = (ev) => {
+    try {
+      const item = JSON.parse(ev.data);
+      if (item.text) {
+        ALL_LOGS.push(item);
+        if (ALL_LOGS.length > 500) ALL_LOGS = ALL_LOGS.slice(-500);
+        if (LOG_LEVEL === 'all' || item.level === LOG_LEVEL) {
+          const box = document.getElementById('consoleBody');
+          const div = document.createElement('div');
+          div.className = 'log-line';
+          div.innerHTML = `<span class="log-ts">[${esc(item.time)}]</span><span class="log-${esc(item.level || 'info')}">${esc(item.text)}</span>`;
+          box.appendChild(div);
+          box.scrollTop = box.scrollHeight;
+        }
+      }
+      if (item.kind === 'audit_updated' || item.kind === 'watchdog' || item.kind === 'jobs_updated') fetchState();
+    } catch (_) {}
+  };
+})();

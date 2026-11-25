@@ -428,7 +428,33 @@ async def test_web_dashboard_index_and_state(tmp_path: Path) -> None:
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         r_html = await c.get("/")
         assert r_html.status_code == 200
-        assert "KINTARO // CONTROL & UNBAN CENTER" in r_html.text
+        assert "KINTARO FARM OS" in r_html.text
+
+        r_js = await c.get("/static/app.js")
+        assert r_js.status_code == 200
+
         r_st = await c.get("/api/state")
         assert r_st.status_code == 200
         assert "accounts" in r_st.json()
+
+        r_prev = await c.post(
+            "/api/preview-lines",
+            json={
+                "lines_text": "demo|pw|d@x.com|JBSWY3DPEHPK3PXP\nu2:pw2:m@outlook.com:mpw:r@polosmail.com:rpw:JBSWY3DPEHPK3PXP",
+                "proxies_text": "198.51.100.1:8080:u:p",
+                "region": "US",
+            },
+        )
+        assert r_prev.status_code == 200
+        assert r_prev.json()["valid_count"] == 2
+
+        r_spin = await c.post(
+            "/api/spintax-preview",
+            json={"template": "{Привет|Хай} @friend #fyp"},
+        )
+        assert r_spin.status_code == 200
+        assert len(r_spin.json()["variants"]) == 4
+
+        r_cfg = await c.get("/api/config")
+        assert r_cfg.status_code == 200
+        assert r_cfg.json()["has_api_key"] is True

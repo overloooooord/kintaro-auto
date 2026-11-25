@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KINTARO // TikTok Farm OS & Unban Center</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 36 36'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%236366f1'/%3E%3Cstop offset='1' stop-color='%2306b6d4'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='36' height='36' rx='10' fill='url(%23g)'/%3E%3Ctext x='18' y='24' text-anchor='middle' fill='%23fff' font-family='sans-serif' font-weight='800' font-size='18'%3EK%3C/text%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+
+<div class="shell">
+  <!-- LEFT NAVIGATION RAIL -->
+  <aside class="rail">
+    <div class="brand">
+      <div class="brand-mark">K</div>
+      <div>
+        <div class="brand-name">KINTARO FARM OS</div>
+        <div class="brand-ver mono">v3.0 · IDC + Outlook Hub</div>
+      </div>
+    </div>
+
+    <div class="nav-group-label">Управление</div>
+    <button class="nav-item active" data-view="fleet" onclick="switchView('fleet')">
+      <span class="nav-item-left"><span>🛡️</span><span>Флот и Ограны</span></span>
+      <span class="nav-pill mono" id="navFleetCnt">0</span>
+    </button>
+    <button class="nav-item" data-view="import" onclick="switchView('import')">
+      <span class="nav-item-left"><span>📥</span><span>Импорт и Вход</span></span>
+      <span class="nav-pill">Hub</span>
+    </button>
+    <button class="nav-item" data-view="upload" onclick="switchView('upload')">
+      <span class="nav-item-left"><span>🚀</span><span>Анти-тень Залив</span></span>
+      <span class="nav-pill">FFmpeg</span>
+    </button>
+
+    <div class="nav-group-label">Контроль</div>
+    <button class="nav-item" data-view="analytics" onclick="switchView('analytics')">
+      <span class="nav-item-left"><span>📊</span><span>Тени и Аналитика</span></span>
+      <span class="nav-pill mono" id="navViewsPill">0</span>
+    </button>
+    <button class="nav-item" data-view="settings" onclick="switchView('settings')">
+      <span class="nav-item-left"><span>⚙️</span><span>Прокси и Конфиг</span></span>
+    </button>
+
+    <div class="rail-footer">
+      <div class="wd-card">
+        <div class="wd-row" style="margin-bottom:8px;">
+          <span style="display:flex;align-items:center;gap:7px;font-weight:600;">
+            <span id="wdDot" class="dot"></span>
+            <span>Сторож 24/7</span>
+          </span>
+          <strong class="mono" id="wdStateTxt" style="font-size:11px;color:var(--text-dim);">OFF</strong>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:9px;">
+          Лёгкий HTTP-опрос по кукам раз в 95–165с + авто-снятие и Private для FAILED.
+        </div>
+        <button id="wdBtn" class="btn btn-sm" style="width:100%;" onclick="toggleWatchdog()">Включить сторожа</button>
+      </div>
+
+      <button class="kbd-hint" onclick="openCmdK()">
+        <span>Быстрые команды</span>
+        <kbd>Ctrl K</kbd>
+      </button>
+    </div>
+  </aside>
+
+  <!-- MAIN COLUMN -->
+  <div class="main-col">
+    <header class="topbar">
+      <div style="display:flex;align-items:center;gap:12px;">
+        <div class="page-title" id="topTitle">Флот аккаунтов и снятие огранов</div>
+        <div id="jobsBadge" class="job-badge hidden">
+          <span class="spin"></span>
+          <span id="jobsText">Выполняется задача...</span>
+        </div>
+      </div>
+      <div class="top-right">
+        <label style="font-size:12px;color:var(--text-dim);display:flex;align-items:center;gap:6px;cursor:pointer;">
+          <input type="checkbox" id="chkHideRejected" checked class="chk" />
+          <span>FAILED посты → Private</span>
+        </label>
+        <button class="btn" id="btnAuditAll" onclick="auditAll()">↻ HTTP-аудит всех (0$)</button>
+        <button class="btn btn-primary" id="btnAppealAll" onclick="appealAll()">⚡ Снять все ограны</button>
+      </div>
+    </header>
+
+    <div class="content">
+      <!-- KPI STRIP -->
+      <section class="kpi-grid">
+        <div class="kpi" style="--kpi-accent:rgba(99,102,241,0.7)">
+          <div class="kpi-top"><span>Аккаунтов в пуле</span><span class="mono">FLEET</span></div>
+          <div class="kpi-val" id="kpiTotal">0</div>
+          <div class="kpi-sub" id="kpiAuthedSub">0 авторизовано</div>
+        </div>
+        <div class="kpi" style="--kpi-accent:rgba(16,185,129,0.75)">
+          <div class="kpi-top"><span>Рекомендации открыты</span><span style="color:var(--ok)">ELIGIBLE</span></div>
+          <div class="kpi-val" style="color:var(--ok)" id="kpiEligible">0</div>
+          <div class="kpi-sub">Чистые и разбаненные</div>
+        </div>
+        <div class="kpi" style="--kpi-accent:rgba(245,158,11,0.75)">
+          <div class="kpi-top"><span>На рассмотрении</span><span style="color:var(--warn)">APPEALING</span></div>
+          <div class="kpi-val" style="color:var(--warn)" id="kpiAppealing">0</div>
+          <div class="kpi-sub">Апелляция подана (до 24ч)</div>
+        </div>
+        <div class="kpi" style="--kpi-accent:rgba(244,63,94,0.75)">
+          <div class="kpi-top"><span>Активный огран</span><span style="color:var(--err)">ACTION</span></div>
+          <div class="kpi-val" style="color:var(--err)" id="kpiAction">0</div>
+          <div class="kpi-sub">Готовы к авто-снятию</div>
+        </div>
+        <div class="kpi" style="--kpi-accent:rgba(6,182,212,0.75)">
+          <div class="kpi-top"><span>Просмотры Studio</span><span style="color:var(--accent-2)">VIEWS</span></div>
+          <div class="kpi-val mono" id="kpiViews">0</div>
+          <div class="kpi-sub" id="kpiPostsSub">0 постов в Studio</div>
+        </div>
+      </section>
+
+      <!-- VIEW 1: FLEET & UNBAN -->
+      <section id="view-fleet">
+        <div class="toolbar">
+          <div class="search-wrap">
+            <span class="search-icon">🔍</span>
+            <input type="text" id="fleetSearch" placeholder="Поиск @handle, UID, email, кластер... (/)" oninput="renderFleet()" />
+          </div>
+          <div class="filters">
+            <button class="chip active" onclick="setFilter('all', this)">Все</button>
+            <button class="chip" onclick="setFilter('eligible', this)">Eligible</button>
+            <button class="chip" onclick="setFilter('appealing', this)">Appealing</button>
+            <button class="chip" onclick="setFilter('action_required', this)">Активный огран</button>
+            <button class="chip" onclick="setFilter('unauth', this)">Без входа</button>
+            <select id="fleetSort" onchange="renderFleet()" style="width:auto;padding:5px 10px;font-size:12px;">
+              <option value="views_desc">Сорт: Просмотры ↓</option>
+              <option value="health">Сорт: Статус ограна</option>
+              <option value="name">Сорт: Имя A-Z</option>
+            </select>
+            <button class="btn btn-sm" id="btnViewMode" onclick="toggleViewMode()">☰ Таблица</button>
+            <button class="btn btn-sm" onclick="toggleSelectAll()">☑ Выбрать все</button>
+          </div>
+        </div>
+        <div id="fleetContainer"></div>
+      </section>
+
+      <!-- VIEW 2: IMPORT & OUTLOOK HUB -->
+      <section id="view-import" class="hidden">
+        <div class="grid-2">
+          <div class="panel">
+            <h3 style="font-size:15.5px;margin-bottom:6px;">Пакетный импорт строк (Outlook Hub + TOTP)</h3>
+            <p style="font-size:12px;color:var(--text-dim);margin-bottom:14px;">
+              Перетащи <code>.txt</code> файл или вставь строки обоих форматов вперемешку:
+              <code class="mono">user|pass|mail|TOTP[|proxy]</code> и
+              <code class="mono">login:pass:outlook:pass:rec:pass:2FA</code>
+            </p>
+            <div id="txtDropzone" class="dropzone" style="padding:14px;margin-bottom:12px;" onclick="document.getElementById('txtFileInput').click()">
+              <div style="font-size:12.5px;font-weight:600;">📄 Перетащи accounts.txt сюда или нажми для выбора файла</div>
+              <input type="file" id="txtFileInput" accept=".txt,.csv" class="hidden" onchange="loadTxtFile(event)" />
+            </div>
+            <div class="field">
+              <label>Строки аккаунтов</label>
+              <textarea id="impLines" oninput="scheduleLinePreview()" placeholder="user|pass|mail@gmail.com|BASE32TOTP&#10;login:pass:mail@outlook.com:mail_pass:rec@polosmail.com:rec_pass:HOTMAIL2FA"></textarea>
+            </div>
+            <div class="field">
+              <label>Пул прокси (по одному на строку — 1:1 привязка, либо оставь пустым для дефолтного: <span id="defProxyHint" class="mono"></span>)</label>
+              <textarea id="impProxies" style="min-height:72px;" oninput="scheduleLinePreview()" placeholder="socks5://user:pass@host:port&#10;ip:port:user:pass"></textarea>
+            </div>
+            <div class="grid-2" style="margin-bottom:12px;">
+              <div class="field" style="margin:0;">
+                <label>Целевой регион профиля</label>
+                <select id="impRegion">
+                  <option value="US" selected>US — United States</option>
+                  <option value="DE">DE — Germany</option>
+                  <option value="GB">GB — United Kingdom</option>
+                </select>
+              </div>
+              <div style="display:flex;flex-direction:column;justify-content:center;gap:6px;font-size:12px;">
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="impAutoLogin" checked class="chk" /> Авто-вход (Outlook Hub / TOTP)</label>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="impAutoAppeal" checked class="chk" /> Сразу снять ограны после входа</label>
+              </div>
+            </div>
+            <button class="btn btn-primary" style="width:100%;" onclick="submitBatchImport()">🚀 Импортировать и запустить конвейер</button>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:14px;">
+            <div class="panel" style="flex:1;">
+              <div class="sec-title">
+                <span>Предпросмотр разбора строк</span>
+                <span class="badge b-cyan mono" id="previewCountBadge">0 валидных</span>
+              </div>
+              <div id="previewTableBox" style="max-height:285px;overflow-y:auto;font-size:12px;color:var(--muted);">
+                Вставь строки слева — парсер мгновенно проверит формат (TOTP / Outlook Hub), 2FA ключи и привязку прокси.
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="sec-title"><span>Импорт готовой папки сессий с диска</span></div>
+              <p style="font-size:12px;color:var(--text-dim);margin-bottom:10px;">
+                Подхватывает <code>kintaro_auth/sessions/*.json</code> и <code>233/sessions/&lt;user&gt;/cookies.json</code> без повторного входа.
+              </p>
+              <div class="field">
+                <input type="text" id="folderPathInput" placeholder="/home/caterinw/Downloads/233/sessions" />
+              </div>
+              <button class="btn" onclick="submitFolderImport()">📁 Импортировать сессии из папки</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- VIEW 3: ANTI-SHADOWBAN UPLOAD STUDIO -->
+      <section id="view-upload" class="hidden">
+        <div class="grid-2">
+          <div class="panel">
+            <h3 style="font-size:15.5px;margin-bottom:6px;">Студия анти-тень залива (FFmpeg / Pillow)</h3>
+            <p style="font-size:12px;color:var(--text-dim);margin-bottom:14px;">
+              Для каждого выбранного аккаунта создаётся отдельная уникализированная копия со свежим SHA-256, зачисткой метаданных и микро-сдвигами.
+            </p>
+            <div id="mediaDropzone" class="dropzone" onclick="document.getElementById('upFiles').click()">
+              <div style="font-size:24px;margin-bottom:6px;">🎬</div>
+              <div style="font-weight:600;font-size:13.5px;">Перетащи MP4 видео или 1–10 фото карусели</div>
+              <div style="font-size:11.5px;color:var(--muted);margin-top:4px;">MP4 &lt; 50 МБ · JPG / PNG &lt; 10 МБ на слайд</div>
+              <input type="file" id="upFiles" multiple accept=".mp4,.jpg,.jpeg,.png" class="hidden" onchange="handleMediaFiles(this.files)" />
+            </div>
+            <div id="mediaThumbs" class="thumbs"></div>
+
+            <div class="field" style="margin-top:14px;">
+              <label>Описание (спинтакс <code>{Вариант А|Вариант Б}</code> + <code>@mentions</code>)</label>
+              <input type="text" id="upDesc" oninput="scheduleSpintaxPreview()" placeholder="{Check this out|Wait till the end} #fyp" />
+            </div>
+            <div id="spintaxBox" style="margin-bottom:14px;display:flex;flex-direction:column;gap:5px;"></div>
+
+            <div class="field">
+              <label>Поиск музыки TikTok (опционально)</label>
+              <input type="text" id="upMusic" placeholder="phonk, dark trap..." />
+            </div>
+            <div style="display:flex;gap:16px;margin-bottom:14px;font-size:12px;">
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="upSkipWarmup" class="chk" /> Пропустить прогрев</label>
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="upForceCooldown" checked class="chk" /> Игнорировать таймер отлёжки</label>
+            </div>
+            <button class="btn btn-primary" id="btnUpload" style="width:100%;" onclick="submitUpload()">📤 Уникализировать и залить на выбранные аккаунты</button>
+          </div>
+
+          <div class="panel">
+            <div class="sec-title">
+              <span>Выбор аккаунтов для залива (Fan-Out)</span>
+              <button class="btn btn-sm" onclick="toggleAllUploadTargets()">Выбрать всех</button>
+            </div>
+            <p style="font-size:12px;color:var(--text-dim);margin-bottom:12px;">
+              Если ни один не отмечен — конвейер автоматически выберет самый отдохнувший аккаунт. Если отмечено несколько — зальёт уникальную копию на каждый.
+            </p>
+            <div id="uploadTargetsList" style="display:flex;flex-direction:column;gap:8px;max-height:420px;overflow-y:auto;"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- VIEW 4: ANALYTICS & SHADOWBAN RADAR -->
+      <section id="view-analytics" class="hidden">
+        <div class="charts-grid">
+          <div class="panel">
+            <div class="sec-title"><span>Распределение просмотров TikTok Studio по аккаунтам</span></div>
+            <div id="viewsBarChart"></div>
+          </div>
+          <div class="panel">
+            <div class="sec-title"><span>Здоровье пула (Health Distribution)</span></div>
+            <div id="healthDonutChart" style="display:flex;align-items:center;justify-content:center;gap:24px;min-height:175px;"></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="sec-title">
+            <span>Радар теневых банов (<code class="mono">check-shadows</code>: 0 просмотров / скрытие из выдачи)</span>
+            <button class="btn btn-sm btn-primary" id="btnCheckShadows" onclick="runShadowCheck()">📡 Запустить радар теней</button>
+          </div>
+          <div id="shadowsTableBox" style="font-size:12.5px;color:var(--text-dim);">
+            Нажми «Запустить радар теней», чтобы сверить историю залитых постов между профилем и публичным эндпоинтом TikTok.
+          </div>
+        </div>
+      </section>
+
+      <!-- VIEW 5: PROXY VAULT & CONFIG EDITOR -->
+      <section id="view-settings" class="hidden">
+        <div class="grid-2">
+          <div class="panel">
+            <div class="sec-title"><span>Массовый тест прокси (Cloudflare Exit IP · GEO · Latency)</span></div>
+            <p style="font-size:12px;color:var(--text-dim);margin-bottom:10px;">
+              Проверяет реальную страну выхода и пинг без касания TikTok. Поддерживает <code>socks5://</code>, <code>http://</code> и <code>ip:port:user:pass</code>.
+            </p>
+            <div class="field">
+              <textarea id="proxyTestInput" placeholder="socks5://user:pass@host:port&#10;ip:port:user:pass"></textarea>
+            </div>
+            <button class="btn btn-primary" id="btnTestProxies" onclick="runProxyTest()">🧪 Проверить прокси</button>
+            <div id="proxyTestResults" style="margin-top:14px;"></div>
+          </div>
+
+          <div class="panel">
+            <div class="sec-title">
+              <span>Настройки конвейера (<code class="mono">config.toml</code>)</span>
+              <span class="badge b-neutral mono" id="cfgKeyBadge">API Key: —</span>
+            </div>
+            <div class="field">
+              <label>Новый Kintaro API Key (оставь пустым, чтобы не менять текущий)</label>
+              <input type="password" id="cfgApiKey" placeholder="Оставь пустым для сохранения текущего ключа" />
+            </div>
+            <div class="grid-2">
+              <div class="field">
+                <label>Параллельных аккаунтов</label>
+                <input type="number" id="cfgParallel" min="1" max="16" value="2" />
+              </div>
+              <div class="field">
+                <label>Макс. постов в день / акк</label>
+                <input type="number" id="cfgDailyMax" min="1" max="50" value="3" />
+              </div>
+            </div>
+            <div class="grid-2">
+              <div class="field">
+                <label>Отлёжка новой сессии (мин)</label>
+                <input type="number" id="cfgAgeMin" min="0" step="5" value="30" />
+              </div>
+              <div class="field">
+                <label>Пауза между постами (часы)</label>
+                <input type="number" id="cfgGapHours" min="0" step="0.5" value="3" />
+              </div>
+            </div>
+            <div style="display:flex;gap:18px;margin-bottom:16px;font-size:12.5px;">
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="cfgWarmupOn" class="chk" /> Автопрогрев ленты</label>
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="cfgUniqOn" class="chk" /> Уникализатор FFmpeg/Pillow</label>
+            </div>
+            <button class="btn btn-emerald" onclick="saveConfig()">💾 Сохранить config.toml</button>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<!-- FLOATING MULTI-SELECT BULK BAR -->
+<div id="bulkBar" class="bulk-bar hidden">
+  <span style="font-size:12.5px;font-weight:700;">Выбрано: <span id="bulkCount" class="mono">0</span></span>
+  <button class="btn btn-sm" onclick="runBulk('audit')">↻ Аудит</button>
+  <button class="btn btn-sm btn-emerald" onclick="runBulk('appeal')">⚡ Снять ограны</button>
+  <button class="btn btn-sm" onclick="runBulk('warmup')">🔥 Прогрев</button>
+  <button class="btn btn-sm" onclick="runBulk('sync_geo')">🌎 Sync US SIM</button>
+  <button class="btn btn-sm" onclick="promptBulkProxy()">🌐 Сменить прокси</button>
+  <button class="btn btn-sm btn-rose" onclick="runBulk('delete')">🗑 Удалить</button>
+  <button class="btn btn-sm btn-ghost" onclick="clearSelection()">✕</button>
+</div>
+
+<!-- SLIDE-OVER ACCOUNT INSPECTOR DRAWER -->
+<div id="drawerBackdrop" class="drawer-backdrop hidden" onclick="if(event.target===this) closeDrawer()">
+  <div class="drawer">
+    <div class="drawer-head">
+      <div id="drawerTitleGroup"></div>
+      <button class="btn btn-sm btn-ghost" onclick="closeDrawer()">✕ Esc</button>
+    </div>
+    <div id="drawerBody" class="drawer-body"></div>
+  </div>
+</div>
+
+<!-- COMMAND PALETTE (Ctrl+K) -->
+<div id="cmdkBackdrop" class="modal-backdrop hidden" onclick="if(event.target===this) closeCmdK()">
+  <div class="cmdk">
+    <input type="text" id="cmdkInput" class="cmdk-in" placeholder="Введи команду или @username аккаунта..." oninput="renderCmdK()" />
+    <div id="cmdkList" class="cmdk-list"></div>
+  </div>
+</div>
+
+<!-- TOAST NOTIFICATIONS -->
+<div id="toasts" class="toasts"></div>
+
+<!-- COLLAPSIBLE FILTERABLE LIVE SSE CONSOLE -->
+<footer id="consoleDock" class="console-dock">
+  <div class="console-bar">
+    <div style="display:flex;align-items:center;gap:10px;cursor:pointer;" onclick="document.getElementById('consoleDock').classList.toggle('collapsed')">
+      <span class="dot on"></span>
+      <span>LIVE ТЕЛЕМЕТРИЯ (SSE)</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:6px;">
+      <button class="chip active" onclick="setLogLevel('all', this)">ALL</button>
+      <button class="chip" onclick="setLogLevel('success', this)">OK</button>
+      <button class="chip" onclick="setLogLevel('warn', this)">WARN</button>
+      <button class="chip" onclick="setLogLevel('error', this)">ERR</button>
+      <button class="btn btn-sm btn-ghost" onclick="clearConsole()">Очистить</button>
+      <button class="btn btn-sm btn-ghost" onclick="document.getElementById('consoleDock').classList.toggle('collapsed')">▲▼</button>
+    </div>
+  </div>
+  <div id="consoleBody" class="console-body"></div>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

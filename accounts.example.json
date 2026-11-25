@@ -1,0 +1,18 @@
+[
+  {
+    "account_id": "acc_01",
+    "proxy": "socks5://USER:PASS@HOST:PORT",
+    "region": "US",
+    "auth_method": "username",
+    "username": "YOUR_USERNAME",
+    "password": "YOUR_PASSWORD",
+    "totp_token": ""
+  },
+  {
+    "account_id": "acc_02_session",
+    "proxy": "http://USER:PASS@HOST:PORT",
+    "region": "DE",
+    "auth_method": "device_only",
+    "device": null
+  }
+]

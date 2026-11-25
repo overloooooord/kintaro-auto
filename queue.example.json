@@ -1,0 +1,29 @@
+[
+  {
+    "task_id": "post_001",
+    "account_id": null,
+    "media_type": "video",
+    "video_path": "media/clip1.mp4",
+    "description": "{Смотри до конца|Как вам такой результат?|Оцените от 1 до 10} #fyp #viral",
+    "mentions": [],
+    "music_id": "",
+    "music_search_keyword": null,
+    "is_private": false,
+    "is_story": false
+  },
+  {
+    "task_id": "post_002",
+    "account_id": "acc_01",
+    "media_type": "photo",
+    "photo_paths": [
+      "media/slide1.jpg",
+      "media/slide2.jpg"
+    ],
+    "description": "{Подборка дня|Сохраняй чтобы не потерять} #aesthetic",
+    "mentions": [],
+    "music_id": "",
+    "music_search_keyword": "phonk",
+    "is_private": false,
+    "is_story": false
+  }
+]

@@ -404,6 +404,8 @@ function renderDrawer() {
       ${a.authenticated ? `<button class="btn btn-sm btn-emerald" onclick="appealAccount('${esc(a.account_id)}', false)">⚡ Снять все ограны</button>` : ''}
       ${a.authenticated ? `<button class="btn btn-sm" onclick="appealAccount('${esc(a.account_id)}', true)">⏳ Дождаться волны (0..10)</button>` : ''}
       ${a.authenticated ? `<button class="btn btn-sm" onclick="warmupAccount('${esc(a.account_id)}')">🔥 Прогреть ленту</button>` : ''}
+      ${a.authenticated ? `<button class="btn btn-sm" onclick="restartAccountApp('${esc(a.account_id)}')">🔄 Рестарт ТТ</button>` : ''}
+      ${a.authenticated ? `<button class="btn btn-sm" onclick="cleanAccountPosts('${esc(a.account_id)}')">🗑 Очистить посты</button>` : ''}
       <button class="btn btn-sm" onclick="syncGeo('${esc(a.account_id)}','US')">🌎 Sync US SIM</button>
       ${a.use_outlook_hub ? `<button class="btn btn-sm btn-amber" onclick="fetchOutlookOtp('${esc(a.account_id)}')">📬 Прочитать Outlook OTP</button>` : ''}
       ${a.authenticated ? `<a class="btn btn-sm" href="/api/accounts/${encodeURIComponent(a.account_id)}/export?mode=cookies" style="text-decoration:none;">⬇ cookies.json</a>` : ''}
@@ -731,6 +733,87 @@ async function submitUpload() {
     renderMediaThumbs();
     await fetchState();
   } catch (e) { toast(e.message, 'err'); } finally { btn.disabled = false; }
+}
+
+async function previewUniquifier() {
+  const photo = UPLOAD_FILES.find(f => !f.name.toLowerCase().endsWith('.mp4'));
+  if (!photo) return toast('Сначала добавь фото-слайд для предпросмотра уникализатора!', 'warn');
+  const fd = new FormData();
+  fd.append('file', photo);
+  fd.append('photo_mode', document.getElementById('upPhotoMode').value);
+  try {
+    const r = await apiJson('/api/uniquifier/preview', { method: 'POST', body: fd });
+    const box = document.getElementById('uniqPreviewBox');
+    box.classList.remove('hidden');
+    box.innerHTML = `
+      <div><div class="mono" style="font-size:11px;color:var(--muted);margin-bottom:4px;">ДО (${r.before_kb} КБ)</div><img src="${r.before_data_url}" style="width:100%;border-radius:8px;border:1px solid var(--border);" /></div>
+      <div><div class="mono" style="font-size:11px;color:var(--ok);margin-bottom:4px;">ПОСЛЕ · ${esc(r.mode)} (${r.after_kb} КБ)</div><img src="${r.after_data_url}" style="width:100%;border-radius:8px;border:1px solid var(--ok);" /></div>`;
+    toast(`Предпросмотр ${r.mode} готов`, 'success');
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function submitCampaign() {
+  if (!UPLOAD_FILES.length) return toast('Добавь 1–10 фото-слайдов или MP4 видео!', 'warn');
+  const fd = new FormData();
+  UPLOAD_FILES.forEach(f => fd.append('files', f));
+  fd.append('account_ids', Array.from(UPLOAD_TARGETS).join(','));
+  fd.append('description', document.getElementById('upDesc').value);
+  fd.append('photo_mode', document.getElementById('upPhotoMode').value);
+  fd.append('auto_music_query', document.getElementById('upMusic').value);
+  fd.append('threads', document.getElementById('upThreads').value || '5');
+  fd.append('copies_count', document.getElementById('upCopies').value || '6');
+  fd.append('restart_every_n', document.getElementById('upRestartN').value || '3');
+  fd.append('delay_min_sec', document.getElementById('upDelayMin').value || '14');
+  fd.append('delay_max_sec', document.getElementById('upDelayMax').value || '20');
+  fd.append('region', (document.getElementById('upRegion').value || 'US').toUpperCase());
+  fd.append('randomize_tags', document.getElementById('upRandTags').checked);
+  fd.append('delete_old_posts', document.getElementById('upDelOld').checked);
+  fd.append('auto_appeal_2048', document.getElementById('upAutoAppeal').checked);
+  fd.append('pin_sticky_proxy', document.getElementById('upStickyProxy').checked);
+
+  const btn = document.getElementById('btnRunCampaign'); btn.disabled = true;
+  try {
+    const r = await apiJson('/api/campaign/run', { method: 'POST', body: fd });
+    toast(`🚀 Кампания запущена в фоне на ${r.accounts} акк.! Следи за Live Console.`, 'success');
+  } catch (e) { toast(e.message, 'err'); } finally { btn.disabled = false; }
+}
+
+async function restartAccountApp(aid) {
+  try { await apiPost(`/api/accounts/${encodeURIComponent(aid)}/restart`); toast(`🔄 TikTok перезапущен на @${aid}`, 'success'); await fetchState(); }
+  catch (e) { toast(e.message, 'err'); }
+}
+
+async function cleanAccountPosts(aid) {
+  if (!confirm(`Удалить все старые посты аккаунта ${aid}?`)) return;
+  try {
+    const r = await apiPost(`/api/accounts/${encodeURIComponent(aid)}/clean-posts`);
+    toast(`🗑 Удалено старых постов: ${r.deleted}`, 'success');
+    await fetchState();
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function runCompetitorSpy() {
+  const uname = (document.getElementById('spyUserInput').value || '').trim();
+  if (!uname) return toast('Введи @username конкурента', 'warn');
+  const btn = document.getElementById('btnSpy'); btn.disabled = true;
+  try {
+    const r = await apiPost('/api/spy', { username: uname, count: 18 });
+    const s = r.spy;
+    document.getElementById('spyResultBox').innerHTML = `
+      <div style="margin-bottom:8px;"><strong>@${esc(s.username)}</strong> · Подписчики: <span class="mono">${s.followers}</span> · Постов: <span class="mono">${s.posts_scanned}</span></div>
+      <div class="mono" style="margin-bottom:8px;color:var(--accent-2);">Всего: ${s.total_views.toLocaleString()} · Средние: ${s.avg_views.toLocaleString()} · Макс: ${s.max_views.toLocaleString()}</div>
+      <div style="margin-bottom:6px;"><strong>Топ теги:</strong> ${(s.top_hashtags || []).slice(0, 8).map(t => `<span class="badge b-neutral">${esc(t.tag)} (${t.count})</span>`).join(' ')}</div>
+      <div><strong>Топ музыка:</strong> ${(s.top_music || []).slice(0, 4).map(m => `<div class="mono" style="font-size:11px;">• ${esc(m.label)} (${esc(m.music_id)}) ×${m.count}</div>`).join('')}</div>`;
+  } catch (e) { toast(e.message, 'err'); } finally { btn.disabled = false; }
+}
+
+async function generateTotpUi() {
+  const sec = (document.getElementById('totpSecretInput').value || '').trim();
+  if (!sec) return toast('Вставь Base32 2FA ключ', 'warn');
+  try {
+    const r = await apiPost('/api/totp/generate', { secret: sec });
+    document.getElementById('totpResultBox').textContent = `${r.code}  (осталось ${r.remaining_sec}с)`;
+  } catch (e) { toast(e.message, 'err'); }
 }
 
 // ── Analytics & Shadowban Radar ──────────────────────────────

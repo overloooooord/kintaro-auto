@@ -6,10 +6,19 @@ import logging
 import random
 import time
 import urllib.parse
+import uuid
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
+from kintaro_auto.appeals import (
+    classify_appeal_folder,
+    list_studio_post_ids,
+    remove_account_restrictions,
+    sort_account_into_folder,
+    wait_and_appeal_settle,
+)
 from kintaro_auto.captions import prepare_description_and_mentions
 from kintaro_auto.client import (
     AuthChallengeRequiredError,
@@ -18,10 +27,14 @@ from kintaro_auto.client import (
 )
 from kintaro_auto.config import AppConfig
 from kintaro_auto.models import (
+    GEO_LOCALE_DEFAULTS,
     AccountRecord,
+    CampaignAccountResult,
+    CampaignConfig,
     PostHealthReport,
     UploadedPostRecord,
     UploadTask,
+    allocate_sticky_proxy,
     apply_device_geo_profile,
     utc_now_iso,
 )
@@ -124,22 +137,70 @@ class AutomationPipeline:
 
         login_region = (account.auth_region or "DE" if account.totp_token and not account.auth_region else (account.auth_region or account.region)).upper()
 
-        # Step A: Register sticky device if none exists yet
-        if account.device is None:
-            await self._register_and_boot_device(account, login_region)
+        # Step A & Mailbox Prep (run Outlook Hub / IMAP prep in parallel with /v1/device/register!)
+        pre_outlook_token = ""
+        pre_imap_server: tuple[str, int] | None = None
+        known_old_ids: set[str] | None = None
 
-        # Step B: Sign in if not yet authenticated
-        if not account.authenticated:
-            if account.auth_method == "device_only":
-                await self.client.get_self(account)
-                account.authenticated = True
-                account.first_authenticated_at = account.first_authenticated_at or utc_now_iso()
-                self.store.save_account(account)
-                return account
+        need_outlook = (
+            not account.authenticated
+            and account.auth_method != "device_only"
+            and account.use_outlook_hub
+            and bool(account.email and account.mail_password)
+        )
+        need_imap = (
+            not account.authenticated
+            and account.auth_method == "email"
+            and not account.use_outlook_hub
+            and bool(account.email and account.mail_password)
+        )
 
-            pre_outlook_token = ""
-            known_old_ids: set[str] | None = None
-            if account.use_outlook_hub and account.email and account.mail_password:
+        if account.device is None and (need_outlook or need_imap):
+            if need_outlook:
+                from kintaro_auto.outlook_hub import prepare_outlook_hub_mailbox
+
+                logger.info(
+                    "[%s] ⚡ Параллельный запуск: Outlook Hub (%s) + /v1/device/register (region=%s)...",
+                    account.account_id,
+                    account.email,
+                    login_region,
+                )
+                mail_coro = asyncio.to_thread(
+                    prepare_outlook_hub_mailbox,
+                    outlook_email=account.email,
+                    outlook_login=account.mail_login or account.email,
+                    outlook_password=account.mail_password,
+                    recovery_email=account.recovery_email,
+                    recovery_password=account.recovery_password,
+                    hotmail_totp=account.mail_totp,
+                    log_fn=lambda m: logger.info("[%s] %s", account.account_id, m),
+                )
+                (pre_outlook_token, known_old_ids), _ = await asyncio.gather(
+                    mail_coro, self._register_and_boot_device(account, login_region)
+                )
+            else:
+                from kintaro_auto.mail_imap import prepare_imap_mailbox
+
+                logger.info(
+                    "[%s] ⚡ Параллельный запуск: IMAP (%s) + /v1/device/register (region=%s)...",
+                    account.account_id,
+                    account.email,
+                    login_region,
+                )
+                imap_coro = asyncio.to_thread(
+                    prepare_imap_mailbox,
+                    account.email,
+                    account.mail_password,
+                    custom_imap_host=account.imap_host or None,
+                    log_fn=lambda m: logger.info("[%s] %s", account.account_id, m),
+                )
+                (pre_imap_server, known_old_ids), _ = await asyncio.gather(
+                    imap_coro, self._register_and_boot_device(account, login_region)
+                )
+        else:
+            if account.device is None:
+                await self._register_and_boot_device(account, login_region)
+            if need_outlook:
                 from kintaro_auto.outlook_hub import prepare_outlook_hub_mailbox
 
                 logger.info(
@@ -157,6 +218,25 @@ class AutomationPipeline:
                     hotmail_totp=account.mail_totp,
                     log_fn=lambda m: logger.info("[%s] %s", account.account_id, m),
                 )
+            elif need_imap:
+                from kintaro_auto.mail_imap import prepare_imap_mailbox
+
+                pre_imap_server, known_old_ids = await asyncio.to_thread(
+                    prepare_imap_mailbox,
+                    account.email,
+                    account.mail_password,
+                    custom_imap_host=account.imap_host or None,
+                    log_fn=lambda m: logger.info("[%s] %s", account.account_id, m),
+                )
+
+        # Step B: Sign in if not yet authenticated
+        if not account.authenticated:
+            if account.auth_method == "device_only":
+                await self.client.get_self(account)
+                account.authenticated = True
+                account.first_authenticated_at = account.first_authenticated_at or utc_now_iso()
+                self.store.save_account(account)
+                return account
 
             for cluster_attempt in range(2):
                 login_region = (
@@ -230,8 +310,30 @@ class AutomationPipeline:
                             min_timestamp=signin_started_ts,
                             pre_access_token=pre_outlook_token,
                             known_old_ids=known_old_ids,
-                            timeout_sec=90,
+                            timeout_sec=120,
                             poll_interval_sec=1.0,
+                            log_fn=lambda m: logger.info("[%s] %s", account.account_id, m),
+                        )
+                        return await self.confirm_signin_code(account, otp_code)
+
+                    if need_imap and account.email and account.mail_password:
+                        from kintaro_auto.mail_imap import wait_for_imap_code
+
+                        logger.info(
+                            "[%s] TikTok запросил 6-значный код (HTTP 403) — читаю новый OTP по IMAP (%s)...",
+                            account.account_id,
+                            account.email,
+                        )
+                        otp_code = await asyncio.to_thread(
+                            wait_for_imap_code,
+                            account.email,
+                            account.mail_password,
+                            since_timestamp=signin_started_ts,
+                            pre_server=pre_imap_server,
+                            known_old_uids=known_old_ids,
+                            custom_imap_host=account.imap_host or None,
+                            timeout_sec=120,
+                            poll_interval_sec=2.5,
                             log_fn=lambda m: logger.info("[%s] %s", account.account_id, m),
                         )
                         return await self.confirm_signin_code(account, otp_code)
@@ -525,6 +627,11 @@ class AutomationPipeline:
         *,
         force_cooldown: bool = False,
         skip_warmup: bool = False,
+        delete_old_posts: bool = False,
+        appeal_after_upload: bool = False,
+        settle_after_upload: bool = True,
+        appeal_studio_posts: bool = False,
+        hide_rejected: bool = True,
     ) -> tuple[AccountRecord, UploadedPostRecord]:
         account = self.select_account_for_task(task, force=force_cooldown)
         await self.ensure_authenticated(account)
@@ -533,6 +640,11 @@ class AutomationPipeline:
         ok, reason = self.check_posting_eligibility(account, force=force_cooldown)
         if not ok:
             raise RuntimeError(f"[{account.account_id}] Залив остановлен защитой от теней: {reason}")
+
+        if delete_old_posts:
+            logger.info("[%s] Удаление старых постов перед заливом...", account.account_id)
+            deleted_cnt = await self.delete_all_account_posts(account)
+            logger.info("[%s] Удалено старых постов: %d", account.account_id, deleted_cnt)
 
         # Organic pre-upload warm-up if enabled and not warmed up recently (<20 min)
         if self.config.warmup.enabled and not skip_warmup:
@@ -547,16 +659,21 @@ class AutomationPipeline:
                 self.config.warmup.pre_upload_pause_seconds_max,
             )
 
-        # Prepare caption, spintax, and trailing-space mentions per Kintaro spec
+        # Prepare caption, spintax, optional hashtag shuffle, and trailing-space mentions per Kintaro spec
         description, mentions = prepare_description_and_mentions(
-            task.description, task.mentions, rng=self._rng
+            task.description,
+            task.mentions,
+            rng=self._rng,
+            shuffle_tags=task.randomize_tags,
         )
 
         # Resolve optional music search
         music_id = task.music_id.strip()
         if not music_id and task.music_search_keyword:
             music_resp = await self.client.search_music(
-                account, keyword=task.music_search_keyword
+                account,
+                keyword=task.music_search_keyword,
+                region_override=task.region_override,
             )
             found_music = extract_first_music_id(music_resp)
             if found_music:
@@ -578,6 +695,7 @@ class AutomationPipeline:
                     description=description,
                     description_mentions=mentions,
                     music_id=music_id,
+                    region_override=task.region_override,
                     is_private=task.is_private,
                     disable_comments=task.disable_comments,
                     disable_duet=task.disable_duet,
@@ -590,7 +708,10 @@ class AutomationPipeline:
                     raise ValueError(f"[{task.task_id}] Не указан `photo_paths`.")
                 srcs = [Path(p) for p in task.photo_paths]
                 media_list = uniquify_photos(
-                    srcs, self.config.uniquifier, rng=self._rng
+                    srcs,
+                    self.config.uniquifier,
+                    rng=self._rng,
+                    mode_override=task.photo_mode,
                 )
                 temp_files.extend(media_list)
                 source_list = [str(s) for s in srcs]
@@ -601,6 +722,7 @@ class AutomationPipeline:
                     description=description,
                     description_mentions=mentions,
                     music_id=music_id,
+                    region_override=task.region_override,
                     is_private=task.is_private,
                     disable_comments=task.disable_comments,
                     disable_duet=task.disable_duet,
@@ -634,6 +756,30 @@ class AutomationPipeline:
         task.completed_at = utc_now_iso()
         task.assigned_account_id = account.account_id
         task.published_aweme_id = aweme_id
+
+        if appeal_after_upload:
+            logger.info(
+                "[%s] Запуск снятия ограничений после залива (settle=%s)...",
+                account.account_id,
+                settle_after_upload,
+            )
+            if settle_after_upload:
+                await wait_and_appeal_settle(
+                    account,
+                    appeal_studio_posts=appeal_studio_posts,
+                    hide_rejected=hide_rejected,
+                    only_account_ineligible=not appeal_studio_posts,
+                    verify_proxy_trace=False,
+                )
+            else:
+                await remove_account_restrictions(
+                    account,
+                    appeal_studio_posts=appeal_studio_posts,
+                    hide_rejected=hide_rejected,
+                    only_account_ineligible=not appeal_studio_posts,
+                    verify_proxy_trace=False,
+                )
+            self.store.save_account(account)
 
         return account, record
 
@@ -703,3 +849,542 @@ class AutomationPipeline:
 
         self.store.save_account(account)
         return reports
+
+    # ── 6. Cold TikTok App Restart & Old Posts Cleanup (merged from swegby) ──
+
+    async def restart_tiktok_app(
+        self,
+        account: AccountRecord,
+        *,
+        target_region: str = "",
+        app_locale: str = "",
+    ) -> AccountRecord:
+        """
+        Simulates cold-closing and relaunching the Android TikTok app via Kintaro API:
+          1) Rotates `session_ids.session`, `session_ids.request`, `start_time`, and `counters.sessions`
+          2) Single fast `/v1/device/new_session` attempt (non-fatal)
+          3) `/v1/device/update_hosts` cold-boot TNC refresh (non-fatal)
+          4) `/v1/device/report {"type": "launch"}` (MSSDK `report_tk` refresh)
+          5) `/v1/account/token_beat`
+          6) `/v1/account/self`
+          7) Re-applies target SIM/geo/locale profile and persists session
+        """
+        if account.device is None:
+            raise RuntimeError(f"[{account.account_id}] Нет x-device для перезапуска TikTok.")
+
+        dev_dict: dict[str, Any] = (
+            dict(json.loads(account.device)) if isinstance(account.device, str) else dict(account.device)
+        )
+        sess_ids = dict(dev_dict.get("session_ids") or {})
+        old_sid = str(sess_ids.get("session") or "")[:8]
+        new_sid = str(uuid.uuid4())
+        sess_ids["session"] = new_sid
+        sess_ids["request"] = str(uuid.uuid4())
+        dev_dict["session_ids"] = sess_ids
+        dev_dict["start_time"] = int(time.time() * 1000)
+        counters = dict(dev_dict.get("counters") or {})
+        counters["sessions"] = int(counters.get("sessions") or 1) + 1
+        dev_dict["counters"] = counters
+        account.device = dev_dict
+
+        logger.info(
+            "[%s] 🔄 Холодный перезапуск TikTok (session %s.. -> %s.., сессий=%d)...",
+            account.account_id,
+            old_sid,
+            new_sid[:8],
+            counters["sessions"],
+        )
+
+        for label, coro in (
+            ("new_session", self.client.new_session(account, max_retries_override=1)),
+            ("update_hosts", self.client.update_hosts(account)),
+            ("device/report(launch)", self.client.device_report(account, "launch")),
+            ("token_beat", self.client.token_beat(account)),
+            ("account/self", self.client.get_self(account)),
+        ):
+            try:
+                await coro
+            except Exception as exc:
+                logger.warning("[%s] Предупреждение %s при перезапуске: %s", account.account_id, label, exc)
+
+        eff_reg = (target_region or account.region).strip().upper()
+        eff_loc = (app_locale or account.app_locale or "").strip() or None
+        if account.device is not None and (eff_reg or eff_loc):
+            account.device = apply_device_geo_profile(account.device, eff_reg, app_locale=eff_loc)
+        account.last_restarted_at = utc_now_iso()
+        account.last_token_beat_at = utc_now_iso()
+        self.store.save_account(account)
+        logger.info("[%s] ✅ Приложение TikTok перезапущено!", account.account_id)
+        return account
+
+    async def list_all_account_post_ids(
+        self,
+        account: AccountRecord,
+        *,
+        max_posts: int = 200,
+    ) -> list[str]:
+        """
+        Collects ALL live post IDs on an account by uniting:
+          1) TikTok Studio `/tiktok/creator/manage/item_list/v1/` (catches Private/Hidden/Under-Review posts at 0$ cost)
+          2) Paginated Kintaro `GET /v1/account/posts` (`max_cursor` loop)
+        """
+        found: list[str] = []
+        seen: set[str] = set()
+
+        # 1) Studio item_list (non-fatal if cookies lack web studio access in mock/unit tests)
+        try:
+            studio_ids = await list_studio_post_ids(account, max_posts=max_posts)
+            for vid in studio_ids:
+                if vid and vid not in seen:
+                    seen.add(vid)
+                    found.append(vid)
+        except Exception as exc:
+            logger.debug("[%s] Studio item_list пропущен при сборе постов: %s", account.account_id, exc)
+
+        # 2) Kintaro mobile API `/v1/account/posts` with cursor pagination
+        cursor = "0"
+        for _ in range(15):
+            if len(found) >= max_posts:
+                break
+            try:
+                resp = await self.client.get_self_posts(account, max_cursor=cursor, count=20)
+            except Exception as exc:
+                if found:
+                    logger.warning("[%s] /v1/account/posts ошибка (используем найденные в Studio): %s", account.account_id, exc)
+                    break
+                raise
+            items = extract_feed_items(resp, self.config.response_mapping)
+            added = 0
+            for it in items:
+                aid = extract_aweme_id(it, self.config.response_mapping)
+                if aid and aid not in seen:
+                    seen.add(aid)
+                    found.append(aid)
+                    added += 1
+            has_more = bool(resp.get("has_more"))
+            next_cursor = str(resp.get("max_cursor") or "")
+            if not has_more or added == 0 or not next_cursor or next_cursor == cursor:
+                break
+            cursor = next_cursor
+
+        return found
+
+    async def delete_single_post(self, account: AccountRecord, aweme_id: str) -> tuple[bool, str]:
+        """Deletes a single TikTok post via Kintaro `POST /v1/post/delete` and prunes local upload_history."""
+        if not account.authenticated or account.device is None:
+            await self.ensure_authenticated(account)
+        target_id = str(aweme_id).strip()
+        resp = await self.client.delete_post(account, target_id)
+        sc = resp.get("status_code", 0)
+        if sc != 0:
+            return False, f"TikTok вернул status_code={sc}: {resp.get('status_msg') or resp}"
+        account.upload_history = [p for p in account.upload_history if p.aweme_id != target_id]
+        self.store.save_account(account)
+        return True, f"Пост {target_id} полностью удалён"
+
+    async def delete_all_account_posts(
+        self,
+        account: AccountRecord,
+        *,
+        keep_ids: set[str] | None = None,
+        dry_run: bool = False,
+    ) -> int:
+        """
+        Discovers ALL posts (Studio + Kintaro mobile API) and permanently deletes them via `/v1/post/delete`.
+        Preserves any IDs in `keep_ids` and only prunes actually deleted posts from `account.upload_history`.
+        """
+        if not account.authenticated or account.device is None:
+            await self.ensure_authenticated(account)
+
+        skip = {str(x).strip() for x in (keep_ids or set()) if x}
+        all_ids = [aid for aid in await self.list_all_account_post_ids(account) if aid not in skip]
+        if dry_run:
+            logger.info("[%s] [DRY-RUN] Найдено старых постов к удалению: %d", account.account_id, len(all_ids))
+            return len(all_ids)
+
+        deleted_ids: set[str] = set()
+        for aid in all_ids:
+            try:
+                resp = await self.client.delete_post(account, aid)
+                sc = resp.get("status_code", 0)
+                if sc == 0:
+                    deleted_ids.add(aid)
+                    logger.info("[%s] 🗑 Удалён старый пост %s", account.account_id, aid)
+                else:
+                    logger.warning(
+                        "[%s] Отказ удаления поста %s (status_code=%s: %s)",
+                        account.account_id,
+                        aid,
+                        sc,
+                        resp.get("status_msg") or "",
+                    )
+            except Exception as exc:
+                logger.warning("[%s] Не удалось удалить пост %s: %s", account.account_id, aid, exc)
+            await self._human_pause(0.4, 0.9)
+
+        if deleted_ids:
+            account.upload_history = [
+                p for p in account.upload_history if p.aweme_id not in deleted_ids
+            ]
+            self.store.save_account(account)
+        return len(deleted_ids)
+
+    # ── 7. Multi-Threaded Anti-Shadow Campaign Runner (5 Threads + 3-Stage 2048) ──
+
+    async def run_anti_shadow_campaign(
+        self,
+        campaign: CampaignConfig,
+        *,
+        progress_cb: Callable[[str, str, dict[str, Any]], None] | None = None,
+    ) -> list[CampaignAccountResult]:
+        """
+        Full N-thread (default 5-thread) anti-shadowban campaign workflow:
+          1. Optional sticky proxy pinning (only modifies proxy if explicitly enabled)
+          2. Auth + target geo/locale profile (`US / en_US`, etc.)
+          3. Optional old-post cleanup (`delete_all_account_posts`)
+          4. Stage 1 Pre-Upload 2048 Auto-Appeal
+          5. Upload N copies (`copies_count=6`) with `minimal_snow` uniquifier, randomized hashtags,
+             unique Fortnite/keyword music track per post, Stage 2 Inter-Post 2048 Auto-Appeal after EVERY post,
+             14-20s pacing, and Cold TikTok App Restart after every `restart_every_n` (3) posts
+          6. Stage 3 Post-Upload 2048 Auto-Appeal (8s settle + 60s quiet window + 4-folder sorting)
+          7. Live initial views snapshot
+        """
+        if not campaign.media_paths:
+            raise ValueError("Не передано ни одного медиафайла для кампании (`media_paths`).")
+        src_paths = [Path(p) for p in campaign.media_paths]
+        for sp in src_paths:
+            if not sp.exists():
+                raise FileNotFoundError(f"Медиафайл кампании не найден: {sp}")
+
+        target_accounts = (
+            [self.store.load_account(aid) for aid in campaign.account_ids]
+            if campaign.account_ids
+            else self.store.list_accounts()
+        )
+        if not target_accounts:
+            raise RuntimeError("Нет аккаунтов для запуска кампании.")
+
+        sem = asyncio.Semaphore(max(1, campaign.threads))
+        state_dir = Path(self.config.state_dir)
+
+        def _emit(aid: str, msg: str, meta: dict[str, Any] | None = None) -> None:
+            logger.info("[%s] %s", aid, msg)
+            if progress_cb:
+                progress_cb(aid, msg, meta or {})
+
+        async def _run_one(idx: int, acc: AccountRecord) -> CampaignAccountResult:
+            if idx < campaign.threads and campaign.threads > 1:
+                await self._sleep(idx * 1.2)
+
+            async with sem:
+                t0 = time.monotonic()
+                res = CampaignAccountResult(
+                    account_id=acc.account_id,
+                    username=acc.username or acc.account_id,
+                    status="running",
+                    target_posts=campaign.copies_count,
+                )
+                eff_region = (campaign.region or acc.region or "US").upper().strip()
+                eff_phone_reg = (campaign.phone_region or eff_region).upper().strip()
+                eff_locale = (
+                    campaign.app_locale
+                    or acc.app_locale
+                    or GEO_LOCALE_DEFAULTS.get(eff_phone_reg, "en_US")
+                ).strip()
+
+                try:
+                    # 1) Optional sticky proxy pinning (never changes `_country-VN` unless override_proxy_country is set!)
+                    if campaign.pin_sticky_proxy or campaign.override_proxy_country:
+                        acc.proxy = allocate_sticky_proxy(
+                            acc.proxy,
+                            target_country=campaign.override_proxy_country,
+                            lifetime="60m",
+                            preserve_existing_session=True,
+                        )
+                        self.store.save_account(acc)
+
+                    # 2) Authenticate if needed
+                    _emit(acc.account_id, f"Старт кампании ({eff_region}/{eff_locale}, уник={campaign.photo_mode})...")
+                    await self.ensure_authenticated(acc)
+                    res.username = acc.username or acc.account_id
+                    if acc.device is not None:
+                        acc.device = apply_device_geo_profile(acc.device, eff_phone_reg, app_locale=eff_locale)
+                        acc.app_locale = eff_locale
+                        self.store.save_account(acc)
+
+                    # 3) Clean old posts
+                    if campaign.delete_old_posts:
+                        _emit(acc.account_id, "Очистка старых видео перед заливом...")
+                        try:
+                            res.deleted_old_posts = await self.delete_all_account_posts(acc)
+                        except Exception as exc:
+                            _emit(acc.account_id, f"Предупреждение очистки старых постов: {exc}")
+
+                    # 4) Stage 1: Pre-upload 2048 Auto-Appeal
+                    if campaign.auto_appeal_2048 and campaign.appeal_pre_upload:
+                        _emit(acc.account_id, "🛡️ [Этап 1/3] Пред-залив Auto-Appeal 2048...")
+                        try:
+                            pre_ap = await remove_account_restrictions(
+                                acc,
+                                appeal_text=campaign.appeal_text,
+                                appeal_studio_posts=False,
+                                only_account_ineligible=True,
+                                verify_proxy_trace=False,
+                            )
+                            res.appeals_sent += pre_ap.notice_appeals_verified
+                        except Exception as exc:
+                            _emit(acc.account_id, f"Предупреждение пред-залив Auto-Appeal: {exc}")
+
+                    if campaign.warmup_before_upload:
+                        _emit(acc.account_id, "🔥 Прогрев FYP перед заливом...")
+                        try:
+                            await self.run_warmup(acc)
+                        except Exception as exc:
+                            _emit(acc.account_id, f"Предупреждение прогрева: {exc}")
+
+                    # 5) Music pool for distinct track per post
+                    music_pool: list[dict[str, str]] = []
+                    used_music_ids: set[str] = set()
+                    if not campaign.music_id.strip() and campaign.auto_music_query.strip():
+                        music_pool = await self.client.build_music_pool(
+                            acc, keyword=campaign.auto_music_query.strip(), region_override=eff_region
+                        )
+                        _emit(acc.account_id, f"🎵 Подобран пул треков ({campaign.auto_music_query}): {len(music_pool)} шт.")
+
+                    # 6) Publish N copies with retry recovery + inter-post 2048 appeal + cold restart every N
+                    used_captions: set[str] = set()
+                    restarted_at_marks: set[int] = set()
+
+                    for attempt in range(1, campaign.max_upload_retries + 1):
+                        if res.posts_published >= campaign.copies_count:
+                            break
+                        if attempt > 1:
+                            _emit(
+                                acc.account_id,
+                                f"🔄 Дозалив оставшихся {campaign.copies_count - res.posts_published} постов (попытка {attempt}/{campaign.max_upload_retries})...",
+                            )
+
+                        while res.posts_published < campaign.copies_count:
+                            copy_num = res.posts_published + 1
+                            desc, mentions = prepare_description_and_mentions(
+                                campaign.description,
+                                campaign.mentions,
+                                rng=self._rng,
+                                shuffle_tags=campaign.randomize_tags,
+                                used_captions=used_captions,
+                            )
+
+                            chosen_music_id = campaign.music_id.strip()
+                            if not chosen_music_id and music_pool:
+                                avail = [t for t in music_pool if t["id"] not in used_music_ids] or list(music_pool)
+                                picked = self._rng.choice(avail)
+                                used_music_ids.add(picked["id"])
+                                chosen_music_id = picked["id"]
+
+                            temp_files: list[PreparedMedia] = []
+                            try:
+                                if campaign.media_type == "video":
+                                    med = uniquify_video(src_paths[0], self.config.uniquifier, rng=self._rng)
+                                    temp_files.append(med)
+                                    resp = await self.client.create_video_post(
+                                        acc,
+                                        med,
+                                        description=desc,
+                                        description_mentions=mentions,
+                                        music_id=chosen_music_id,
+                                        region_override=eff_region,
+                                        is_private=campaign.is_private,
+                                        disable_comments=campaign.disable_comments,
+                                        is_story=campaign.is_story,
+                                    )
+                                else:
+                                    med_list = uniquify_photos(
+                                        src_paths,
+                                        self.config.uniquifier,
+                                        rng=self._rng,
+                                        mode_override=campaign.photo_mode,
+                                        overrides=campaign.uniquifier_overrides or None,
+                                    )
+                                    temp_files.extend(med_list)
+                                    try:
+                                        resp = await self.client.create_photo_post(
+                                            acc,
+                                            med_list,
+                                            description=desc,
+                                            description_mentions=mentions,
+                                            music_id=chosen_music_id,
+                                            region_override=eff_region,
+                                            is_private=campaign.is_private,
+                                            disable_comments=campaign.disable_comments,
+                                            is_story=campaign.is_story,
+                                        )
+                                    except KintaroApiError:
+                                        if chosen_music_id and not campaign.music_id.strip():
+                                            alt = next(
+                                                (t["id"] for t in music_pool if t["id"] != chosen_music_id and t["id"] not in used_music_ids),
+                                                "",
+                                            )
+                                            resp = await self.client.create_photo_post(
+                                                acc,
+                                                med_list,
+                                                description=desc,
+                                                description_mentions=mentions,
+                                                music_id=alt,
+                                                region_override=eff_region,
+                                                is_private=campaign.is_private,
+                                                disable_comments=campaign.disable_comments,
+                                                is_story=campaign.is_story,
+                                            )
+                                        else:
+                                            raise
+                            except Exception as u_exc:
+                                _emit(acc.account_id, f"⚠️ Сбой на посте {copy_num}/{campaign.copies_count}: {u_exc}")
+                                await self._sleep(2.5)
+                                break
+                            finally:
+                                for mf in temp_files:
+                                    if mf.is_temporary:
+                                        mf.path.unlink(missing_ok=True)
+
+                            if acc.device is not None:
+                                acc.device = apply_device_geo_profile(acc.device, eff_phone_reg, app_locale=eff_locale)
+
+                            aweme_id = extract_aweme_id(resp, self.config.response_mapping) or ""
+                            kind_seg = "video" if campaign.media_type == "video" else "photo"
+                            post_url = (
+                                f"https://www.tiktok.com/@{acc.username or acc.account_id}/{kind_seg}/{aweme_id}"
+                                if aweme_id
+                                else ""
+                            )
+                            acc.upload_history.append(
+                                UploadedPostRecord(
+                                    aweme_id=aweme_id or None,
+                                    media_type=campaign.media_type,
+                                    source_files=[str(s) for s in src_paths],
+                                    description=desc,
+                                )
+                            )
+                            self.store.save_account(acc)
+
+                            res.posts_published += 1
+                            if aweme_id:
+                                res.aweme_ids.append(aweme_id)
+                            if post_url:
+                                res.post_urls.append(post_url)
+                            _emit(
+                                acc.account_id,
+                                f"✅ Пост [{res.posts_published}/{campaign.copies_count}] опубликован: {post_url or aweme_id}",
+                                {"published": res.posts_published, "aweme_id": aweme_id},
+                            )
+
+                            # Inter-post 2048 hook + pacing + Cold TikTok App Restart every N posts
+                            if res.posts_published < campaign.copies_count:
+                                t_hook0 = time.monotonic()
+                                if campaign.auto_appeal_2048 and campaign.appeal_inter_post:
+                                    await self._sleep(3.0)
+                                    try:
+                                        mid_ap = await remove_account_restrictions(
+                                            acc,
+                                            post_ids=list(res.aweme_ids),
+                                            appeal_text=campaign.appeal_text,
+                                            appeal_studio_posts=False,
+                                            only_account_ineligible=True,
+                                            verify_proxy_trace=False,
+                                        )
+                                        if mid_ap.notice_appeals_verified > 0:
+                                            res.appeals_sent += mid_ap.notice_appeals_verified
+                                            _emit(
+                                                acc.account_id,
+                                                f"⚡ Межпостовой 2048 Auto-Appeal: +{mid_ap.notice_appeals_verified} (всего: {res.appeals_sent})",
+                                            )
+                                    except Exception as m_exc:
+                                        _emit(acc.account_id, f"⚠️ Межпостовой чек 2048: {m_exc}")
+
+                                hook_dt = time.monotonic() - t_hook0
+                                if campaign.delay_max_sec > 0:
+                                    target_pause = self._rng.uniform(
+                                        campaign.delay_min_sec,
+                                        max(campaign.delay_min_sec, campaign.delay_max_sec),
+                                    )
+                                    rem_pause = max(0.0, target_pause - hook_dt)
+                                    if rem_pause > 0.2:
+                                        await self._sleep(rem_pause)
+
+                                if (
+                                    campaign.restart_every_n > 0
+                                    and res.posts_published % campaign.restart_every_n == 0
+                                    and res.posts_published not in restarted_at_marks
+                                ):
+                                    restarted_at_marks.add(res.posts_published)
+                                    await self.restart_tiktok_app(
+                                        acc, target_region=eff_phone_reg, app_locale=eff_locale
+                                    )
+
+                    # 7) Stage 3: Post-upload 2048 wave settle + 4-folder sorting
+                    final_audit = None
+                    if campaign.auto_appeal_2048 and campaign.appeal_post_upload:
+                        if campaign.appeal_post_wait_sec > 0 and res.posts_published > 0:
+                            await self._sleep(campaign.appeal_post_wait_sec)
+                        _emit(
+                            acc.account_id,
+                            f"🛡️ [Этап 3/3] Пост-залив Auto-Appeal 2048 (тишина {int(campaign.appeal_quiet_window_sec)}с)...",
+                        )
+                        try:
+                            post_ap = await wait_and_appeal_settle(
+                                acc,
+                                appeal_text=campaign.appeal_text,
+                                appeal_studio_posts=False,
+                                only_account_ineligible=True,
+                                verify_proxy_trace=False,
+                                quiet_seconds=campaign.appeal_quiet_window_sec,
+                                poll_interval_seconds=6.0,
+                            )
+                            res.appeals_sent += post_ap.notice_appeals_verified
+                            final_audit = post_ap.audit
+                        except Exception as p_exc:
+                            _emit(acc.account_id, f"⚠️ Пост-залив Auto-Appeal ошибка: {p_exc}")
+
+                    folder_key, folder_title = classify_appeal_folder(final_audit, had_error=False)
+                    res.folder_key = folder_key
+                    res.appeal_verdict = folder_title
+                    if campaign.sort_to_folders:
+                        sort_account_into_folder(state_dir, folder_key, acc)
+
+                    # Quick live views snapshot
+                    try:
+                        sp_resp = await self.client.get_self_posts(acc, count=12)
+                        sp_items = extract_feed_items(sp_resp, self.config.response_mapping)
+                        res.initial_views = sum(
+                            int(extract_play_count(it, self.config.response_mapping) or 0) for it in sp_items
+                        )
+                    except Exception:
+                        pass
+
+                    res.status = (
+                        "completed"
+                        if res.posts_published >= campaign.copies_count
+                        else ("partial" if res.posts_published > 0 else "upload_failed")
+                    )
+                    res.elapsed_sec = round(time.monotonic() - t0, 1)
+                    _emit(
+                        acc.account_id,
+                        f"🏁 Кампания завершена за {res.elapsed_sec}с: постов={res.posts_published}/{campaign.copies_count}, "
+                        f"апелляций={res.appeals_sent}, папка={res.folder_key}, просмотры={res.initial_views}",
+                        {"status": res.status, "folder_key": res.folder_key},
+                    )
+                    return res
+
+                except Exception as exc:
+                    res.status = "error"
+                    res.error = str(exc)
+                    res.folder_key = "errors"
+                    res.elapsed_sec = round(time.monotonic() - t0, 1)
+                    if campaign.sort_to_folders:
+                        try:
+                            sort_account_into_folder(state_dir, "errors", acc, note=str(exc)[:120])
+                        except Exception:
+                            pass
+                    _emit(acc.account_id, f"❌ Ошибка кампании: {exc}", {"status": "error"})
+                    return res
+
+        return list(await asyncio.gather(*(_run_one(i, a) for i, a in enumerate(target_accounts))))

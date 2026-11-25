@@ -7,20 +7,23 @@
 1. **Жёсткая изоляция `1 аккаунт = 1 x-device = 1 постоянный x-proxy = 1 region`** — слепок устройства сохраняется атомарно в `state/accounts/<id>.json` после `POST /v1/device/register` и обновляется при каждом ответе сервера (`signin`, `update_hosts`, `token_beat`).
 2. **Жизненный цикл сессии и отлёжка** — `update_hosts` + `token_beat`, блокировка мгновенного залива в первые минуты после первичного логина (`min_session_age_minutes_before_first_post`), контроль интервала между постами и дневного лимита.
 3. **Органический прогрев перед публикацией (`warmup`)** — чтение ленты `GET /v1/feed/recommendations`, отправка `POST /v1/post/view` с реалистичным `playtime` в миллисекундах, вероятностное чтение комментариев, редкие лайки и подписки со случайными паузами.
-4. **Аппаратная уникализация каждого крео перед отправкой (`ffmpeg` + `Pillow`)**:
-   - **Видео (`mp4` до 50 МБ):** полная зачистка метаданных (`-map_metadata -1`), микро-кроп с возвратом исходного чётного разрешения (`lanczos`), незаметный сдвиг яркости/контраста/насыщенности, микро-джиттер скорости видео и аудио (`setpts` + `atempo`), случайный `CRF`, свежий `creation_time`.
-   - **Фото (`jpg`/`png`, до 10 слайдов по 10 МБ):** удаление EXIF/ICC профилей, микро-кроп, лёгкий цветовой сдвиг и мутация отдельных пикселей для смены хеша.
-5. **Уникализация текста и валидация упоминаний** — поддержка спинтакса `{Вариант А|Вариант Б}` и автоматическая постановка обязательного пробела после каждого `@username ` согласно спецификации Kintaro API (`description_mentions`).
-6. **Мониторинг теней (`check-shadows`)** — сверка `GET /v1/account/posts` и публичного `GET /v1/post/get` с проверкой нулевых просмотров спустя заданное время.
-7. **Мгновенный HTTP-аудит (`audit`) и 3-канальное снятие огранов (`appeal` / `unban`)** — за `0$` Kintaro без лишних запусков браузера опрашивает региональный мобильный шлюз кластера аккаунта (`api16-normal-no1a.tiktokv.eu` и др.) и TikTok Studio по кукам сессии:
-   - **Мобильный шлюз уведомлений (`group=47/661`, `/aweme/v1/notice/multi/` + `/api/violation/v1/get_violation_detail`):** достаёт точный статус (`Effecting`, `Appealing`, `AppealSuccess`, `AppealFailed`), `AppealId`, источник `bric_social`, проверяет плашку `Update your account region` и подаёт апелляцию каскадом из 3 каналов: `POST /api/violation/v1/commit_appeal` → `POST /aweme/v2/appeal/commit/` → фоллбэк в headless Chrome `BytedanceWebview` (`POST /tns-api/appeal/post-commit`).
-   - **Постовые ограны в TikTok Studio (`/tiktok/creator/manage/item_list/v1/`):** проверяет до 50 последних постов через `/mod/v1/getPenaltyDetails/` и `/api/moderation/penalties/gettransparencypagecontent`, снимает флаги `For You feed` с человеческой паузой `8.5–17.5с` между постами и по флагу `--hide-rejected` автоматически переводит отклонённые (`FAILED`) посты в `Private`, чтобы не словить 30-дневный бан `punish_type=2048` на весь аккаунт.
+4. **Аппаратная уникализация каждого крео перед отправкой (`ffmpeg` + 6-пресетный Pillow Anti-pHash / Anti-ViT движок)**:
+   - **Видео (`mp4` до 50 МБ):** полная зачистка метаданных (`-map_metadata -1`), микро-кроп с возвратом исходного чётного разрешения (`lanczos`), незаметный сдвиг яркости/контраста/насыщенности, микро-джиттер скорости видео и аудио (`setpts` + `atempo`), случайный `CRF`, Android `mp42` профиль + pure-Python ISO-BMFF `free`-atom фоллбэк без `ffmpeg`.
+   - **Фото (`jpg`/`png`/`webp`, до 10 слайдов по 10 МБ):** 6 пресетов — **`minimal_snow`** (дефолт под US-реки: микро-кроп `0.8–1.5% / 1.2–2.2%`, наклон `0.25°`, `115–175` снежинок, шум матрицы `1.2`, JPEG `90–95`), `minimal`, `stealth` (без снега), `medium`, `boosted` (3-слойный снег + боке + ветер), `ultra_hard` (3D-перспектива + плавающая карточка на размытом фоне + поворот Hue + световой блик + RGB-сдвиг).
+5. **Уникализация текста, рандомизация тегов и валидация упоминаний** — спинтакс `{Вариант А|Вариант Б}`, `{RAND4}` / `{RAND6}`, уникальная перестановка порядка хэштегов на каждый пост (`randomize_hashtags`), и автоматический пробел после каждого `@username ` (`description_mentions`).
+6. **Холодный перезапуск TikTok (`restart-app`) и 5-поточный анти-теневой пролив (`campaign`)**:
+   - Автоочистка старых постов (`clean-posts`), пул уникальных треков под ГЕО (`build_music_pool`, например `Fortnite`), пауза `14–20с`, холодный перезапуск приложения каждые `N` постов (ротация `session_ids.session` + `new_session` + `update_hosts` + `device/report(launch)` + `token_beat` + `account/self`) и **3-этапный Auto-Appeal 2048** (до залива, после каждого поста, пост-заливная ловля волн до 60с тишины + автосортировка в `state/sorted_accounts/{clean,ogran_na_proverke,ogran_ne_snyat,errors}/`).
+   - Поддержка **Outlook Hub** (Microsoft Graph API + 2FA + recovery IMAP) **и** классического **IMAP** (Firstmail, Rambler, Mail.ru, Yandex, GMX, NotLetters) с параллельным запуском почты + `/v1/device/register`.
+   - 21 SIM/GEO профиль (`US, GB, CA, AU, IT, DE, FR, ES, BR, PT, MX, CL, AR, CO, PE, PL, KZ, UA, PH, ID, VN`) + опциональный sticky-pinning на `bpproxy.at`.
+7. **Мониторинг теней (`check-shadows`), Competitor Spy (`spy`) и живой TOTP (`totp`)** — сверка `GET /v1/account/posts` и публичного `GET /v1/post/get`, анализ охватов/хэштегов/вирусных Music ID конкурентов и RFC 6238 генератор 6-значных 2FA кодов.
+8. **Мгновенный HTTP-аудит (`audit`) и 3-канальное снятие огранов (`appeal` / `unban`)** — за `0$` Kintaro без лишних запусков браузера опрашивает региональный мобильный шлюз кластера аккаунта (`no1a`, `alisg`, `useast1a/2a/5`) и TikTok Studio по кукам сессии:
+   - **Мобильный шлюз уведомлений (`group=47/661`, `/aweme/v1/notice/multi/` + `/api/violation/v1/get_violation_detail`):** достаёт все `0..10+` distinct `punish_id` (дедупликация строго по `punish_id`), точный статус (`Effecting`, `Appealing`, `AppealSuccess`, `AppealFailed`), `AppealId`, источник `bric_social` и подаёт апелляцию каскадом из 3 каналов: `POST /api/violation/v1/commit_appeal` → `POST /aweme/v2/appeal/commit/` → фоллбэк в headless Chrome `BytedanceWebview` (`POST /tns-api/appeal/post-commit`) + мгновенная перепроверка авто-одобрения.
+   - **Постовые ограны в TikTok Studio:** отключены по умолчанию (фокус на `2048 Account ineligible for recommendation`); включаются опционально через `--include-studio`.
 
-8. **Веб-интерфейс KINTARO FARM OS v3.0 (`kintaro-auto web`)** — локальный центр управления на FastAPI + Live SSE (`http://127.0.0.1:8080`):
-   - Боковая навигация на 5 разделов (`Флот и Ограны`, `Импорт и Вход`, `Анти-тень Залив`, `Тени и Аналитика`, `Прокси и Конфиг`) + командная палитра `Ctrl+K`.
-   - Режим Карточки/Таблица, поиск, чекбоксы и плавающая панель массовых действий (`Аудит`, `Снять ограны`, `Прогрев`, `Sync US SIM`, `Сменить прокси`, `Удалить`).
-   - Выдвижной Инспектор аккаунта: проверка и смена прокси (Cloudflare Exit IP/GEO + пинг), редактор Nickname/Bio/Link, чтение Outlook OTP в 1 клик, экспорт `cookies.json` / `x-device.json`, таблица постов Studio со спарклайнами и переводом в `Private`/`Public`.
-   - Drag & Drop `.txt` импорт с предпросмотром парсера и 1-к-1 пулом прокси, Drag & Drop залив медиа с миниатюрами и Fan-Out по выбранным аккаунтам, SVG-графики просмотров и здоровья пула, массовый тестер прокси и визуальный редактор `config.toml`.
+9. **Веб-интерфейс KINTARO FARM OS v4.0 (`kintaro-auto web`)** — локальный центр управления на FastAPI + Live SSE (`http://127.0.0.1:8080`):
+   - **Студия Анти-Тень Кампаний:** 5-поточный залив `6×` постов, выбор пресета уникализатора (`minimal_snow`..`ultra_hard`) + **живой предпросмотр До / После**, рандом хэштегов, авто-музыка, рестарт TikTok каждые N постов, 3-этапный Auto-Appeal 2048.
+   - **Инспектор аккаунта:** холодный перезапуск ТТ, очистка старых постов, аудит/снятие волн 2048, смена прокси, редактор Nickname/Bio/Link, чтение Outlook OTP в 1 клик, экспорт `cookies.json` / `x-device.json`, таблица постов Studio.
+   - **Competitor Spy + Live TOTP + Радар теней + Массовый тестер прокси + Редактор `config.toml`**.
 
 > **Важно:** ни один скрипт на стороне клиента не может гарантировать 0% теней, если используются грязные датацентровые прокси (не совпадающие по GEO с `region`), спам-крео под фильтр модерации или убитые аккаунты. Инструмент полностью убирает технические триггеры со стороны API, сессий и дублей медиа.
 
@@ -96,6 +99,17 @@ uv run kintaro-auto appeal --hide-rejected
 # Бесконечный фоновый сторож по кукам (анти-фрод рандом 95–165 сек между циклами без повторных логинов)
 uv run kintaro-auto appeal --watch --hide-rejected
 
-# Локальный тест уникализатора медиа без API-ключа
-uv run kintaro-auto uniquify-test media/clip1.mp4
+# Локальный тест уникализатора медиа без API-ключа (поддерживает --mode minimal_snow / ultra_hard)
+uv run kintaro-auto uniquify-test media/slide1.jpg --mode minimal_snow
+
+# 5-поточная анти-теневая кампания (6 постов + minimal_snow + рестарт ТТ после 3 + 3-этапный Auto-Appeal 2048)
+uv run kintaro-auto campaign -m slide1.jpg -m slide2.jpg -d "#piratetoken #piratetokenshop #blackknight #pirateshop #fyp" --threads 5 --copies 6 --photo-mode minimal_snow --restart-every 3 --music Fortnite
+
+# Холодный перезапуск приложения TikTok и очистка старых постов
+uv run kintaro-auto restart-app
+uv run kintaro-auto clean-posts
+
+# Анализ конкурента (охваты, хэштеги, вирусная музыка) и живой TOTP 2FA код
+uv run kintaro-auto spy @competitor_handle
+uv run kintaro-auto totp JBSWY3DPEHPK3PXP
 ```

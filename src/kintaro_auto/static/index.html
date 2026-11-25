@@ -19,7 +19,7 @@
       <div class="brand-mark">K</div>
       <div>
         <div class="brand-name">KINTARO FARM OS</div>
-        <div class="brand-ver mono">v3.0 · IDC + Outlook Hub</div>
+        <div class="brand-ver mono">v4.0 · Campaign + Unban + Spy</div>
       </div>
     </div>
 
@@ -212,13 +212,16 @@
         </div>
       </section>
 
-      <!-- VIEW 3: ANTI-SHADOWBAN UPLOAD STUDIO -->
+      <!-- VIEW 3: ANTI-SHADOWBAN CAMPAIGN & UPLOAD STUDIO v4.0 -->
       <section id="view-upload" class="hidden">
         <div class="grid-2">
           <div class="panel">
-            <h3 style="font-size:15.5px;margin-bottom:6px;">Студия анти-тень залива (FFmpeg / Pillow)</h3>
-            <p style="font-size:12px;color:var(--text-dim);margin-bottom:14px;">
-              Для каждого выбранного аккаунта создаётся отдельная уникализированная копия со свежим SHA-256, зачисткой метаданных и микро-сдвигами.
+            <div class="sec-title">
+              <span>🚀 Студия Анти-Тень Кампании (5 потоков · minimal_snow · 2048)</span>
+              <button class="btn btn-sm" onclick="previewUniquifier()">👁 Превью До / После</button>
+            </div>
+            <p style="font-size:12px;color:var(--text-dim);margin-bottom:12px;">
+              Объединённый конвейер без тени: уникальный рендер на каждый пост, рандомизация хэштегов, авто-музыка, холодный перезапуск TikTok каждые N постов и 3-этапный Auto-Appeal 2048.
             </p>
             <div id="mediaDropzone" class="dropzone" onclick="document.getElementById('upFiles').click()">
               <div style="font-size:24px;margin-bottom:6px;">🎬</div>
@@ -227,33 +230,70 @@
               <input type="file" id="upFiles" multiple accept=".mp4,.jpg,.jpeg,.png" class="hidden" onchange="handleMediaFiles(this.files)" />
             </div>
             <div id="mediaThumbs" class="thumbs"></div>
+            <div id="uniqPreviewBox" class="hidden" style="margin-top:10px;display:grid;grid-template-columns:1fr 1fr;gap:10px;"></div>
 
-            <div class="field" style="margin-top:14px;">
-              <label>Описание (спинтакс <code>{Вариант А|Вариант Б}</code> + <code>@mentions</code>)</label>
-              <input type="text" id="upDesc" oninput="scheduleSpintaxPreview()" placeholder="{Check this out|Wait till the end} #fyp" />
+            <div class="field" style="margin-top:12px;">
+              <label>Описание и хэштеги (спинтакс <code>{А|Б}</code> + <code>{RAND4}</code> + <code>@mentions</code>)</label>
+              <input type="text" id="upDesc" oninput="scheduleSpintaxPreview()" value="#piratetoken #piratetokenshop #blackknight #pirateshop #fyp" placeholder="{Check this out|Wait till the end} #fyp" />
             </div>
-            <div id="spintaxBox" style="margin-bottom:14px;display:flex;flex-direction:column;gap:5px;"></div>
+            <div id="spintaxBox" style="margin-bottom:10px;display:flex;flex-direction:column;gap:5px;"></div>
 
-            <div class="field">
-              <label>Поиск музыки TikTok (опционально)</label>
-              <input type="text" id="upMusic" placeholder="phonk, dark trap..." />
+            <div class="grid-2" style="margin-bottom:10px;">
+              <div class="field" style="margin:0;">
+                <label>Пресет фото-уникализатора</label>
+                <select id="upPhotoMode">
+                  <option value="minimal_snow" selected>❄️ minimal_snow (US FYP · 115–175 снеж.)</option>
+                  <option value="minimal">✨ minimal (лёгкий снег 45–85)</option>
+                  <option value="stealth">🕵️ stealth (без снега · перспектива + шум)</option>
+                  <option value="medium">⚖️ medium (140–240 + ветер)</option>
+                  <option value="boosted">❄️ boosted (330–510 + боке)</option>
+                  <option value="ultra_hard">🔥 ultra_hard (3D-карточка + Hue + фон)</option>
+                  <option value="off">⛔ off (без уникализации)</option>
+                </select>
+              </div>
+              <div class="field" style="margin:0;">
+                <label>Авто-музыка TikTok (пул треков)</label>
+                <input type="text" id="upMusic" value="Fortnite" placeholder="Fortnite, phonk..." />
+              </div>
             </div>
-            <div style="display:flex;gap:16px;margin-bottom:14px;font-size:12px;">
-              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="upSkipWarmup" class="chk" /> Пропустить прогрев</label>
-              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="upForceCooldown" checked class="chk" /> Игнорировать таймер отлёжки</label>
+
+            <div class="grid-2" style="margin-bottom:10px;">
+              <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+                <div class="field" style="margin:0;"><label>Потоки</label><input type="number" id="upThreads" value="5" min="1" max="20" /></div>
+                <div class="field" style="margin:0;"><label>Постов</label><input type="number" id="upCopies" value="6" min="1" max="30" /></div>
+                <div class="field" style="margin:0;"><label>Рестарт N</label><input type="number" id="upRestartN" value="3" min="0" max="20" /></div>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+                <div class="field" style="margin:0;"><label>Пауза мин</label><input type="number" id="upDelayMin" value="14" min="0" /></div>
+                <div class="field" style="margin:0;"><label>Пауза макс</label><input type="number" id="upDelayMax" value="20" min="0" /></div>
+                <div class="field" style="margin:0;"><label>Регион</label><input type="text" id="upRegion" value="US" maxlength="2" /></div>
+              </div>
             </div>
-            <button class="btn btn-primary" id="btnUpload" style="width:100%;" onclick="submitUpload()">📤 Уникализировать и залить на выбранные аккаунты</button>
+
+            <div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:12px;font-size:12px;">
+              <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" id="upRandTags" checked class="chk" /> Рандом тегов</label>
+              <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" id="upDelOld" checked class="chk" /> Удалить старые</label>
+              <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" id="upAutoAppeal" checked class="chk" /> 3-этапный Auto-Appeal 2048 (60с)</label>
+              <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" id="upStickyProxy" class="chk" /> Sticky bpproxy</label>
+            </div>
+
+            <div style="display:flex;gap:8px;">
+              <button class="btn btn-primary" id="btnRunCampaign" style="flex:1;" onclick="submitCampaign()">🚀 Запустить 5-поточную кампанию (6× + 2048)</button>
+              <button class="btn" id="btnUpload" onclick="submitUpload()" title="Быстрый одиночный залив 1 поста">📤 1 пост</button>
+            </div>
+            <input type="checkbox" id="upSkipWarmup" class="hidden" />
+            <input type="checkbox" id="upForceCooldown" checked class="hidden" />
           </div>
 
           <div class="panel">
             <div class="sec-title">
-              <span>Выбор аккаунтов для залива (Fan-Out)</span>
+              <span>Выбор аккаунтов для кампании</span>
               <button class="btn btn-sm" onclick="toggleAllUploadTargets()">Выбрать всех</button>
             </div>
             <p style="font-size:12px;color:var(--text-dim);margin-bottom:12px;">
-              Если ни один не отмечен — конвейер автоматически выберет самый отдохнувший аккаунт. Если отмечено несколько — зальёт уникальную копию на каждый.
+              Отметь нужные аккаунты или оставь пустым (кампания пойдёт по всему флоту в выбранное число потоков).
             </p>
-            <div id="uploadTargetsList" style="display:flex;flex-direction:column;gap:8px;max-height:420px;overflow-y:auto;"></div>
+            <div id="uploadTargetsList" style="display:flex;flex-direction:column;gap:8px;max-height:460px;overflow-y:auto;"></div>
           </div>
         </div>
       </section>
@@ -271,13 +311,35 @@
           </div>
         </div>
 
-        <div class="panel">
+        <div class="panel" style="margin-bottom:16px;">
           <div class="sec-title">
             <span>Радар теневых банов (<code class="mono">check-shadows</code>: 0 просмотров / скрытие из выдачи)</span>
             <button class="btn btn-sm btn-primary" id="btnCheckShadows" onclick="runShadowCheck()">📡 Запустить радар теней</button>
           </div>
           <div id="shadowsTableBox" style="font-size:12.5px;color:var(--text-dim);">
             Нажми «Запустить радар теней», чтобы сверить историю залитых постов между профилем и публичным эндпоинтом TikTok.
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="panel">
+            <div class="sec-title"><span>🕵️ Competitor Spy (анализ конкурента)</span></div>
+            <div style="display:flex;gap:8px;margin-bottom:10px;">
+              <input type="text" id="spyUserInput" placeholder="@username конкурента" />
+              <button class="btn btn-sm btn-primary" id="btnSpy" onclick="runCompetitorSpy()">Сканировать</button>
+            </div>
+            <div id="spyResultBox" style="font-size:12px;color:var(--text-dim);">
+              Показывает охваты, средние/макс просмотры, вирусные Music ID и топ хэштеги конкурента.
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="sec-title"><span>🔐 Живой TOTP 2FA генератор</span></div>
+            <div style="display:flex;gap:8px;margin-bottom:10px;">
+              <input type="text" id="totpSecretInput" placeholder="Base32 2FA ключ (16–32 симв.)" />
+              <button class="btn btn-sm btn-emerald" onclick="generateTotpUi()">Получить код</button>
+            </div>
+            <div id="totpResultBox" class="mono" style="font-size:18px;font-weight:700;color:var(--accent-2);">—</div>
           </div>
         </div>
       </section>

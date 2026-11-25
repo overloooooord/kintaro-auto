@@ -951,9 +951,10 @@ def outlook_code(
 @app.command("uniquify-test")
 def uniquify_test(
     media_path: Annotated[Path, typer.Argument(help="Путь к тестовому MP4 или JPG/PNG")],
+    mode: Annotated[str, typer.Option("--mode", "-m", help="Пресет фото: minimal_snow, minimal, stealth, medium, boosted, ultra_hard")] = "minimal_snow",
     config: Annotated[Path | None, typer.Option("--config", "-c")] = None,
 ) -> None:
-    """Локальная проверка уникализатора медиа (ffmpeg / Pillow) без запросов к API."""
+    """Локальная проверка уникализатора медиа (ffmpeg / Pillow + minimal_snow/ultra_hard) без запросов к API."""
     cfg = load_config(config)
     ext = media_path.suffix.lower()
     if ext == ".mp4":
@@ -962,15 +963,180 @@ def uniquify_test(
             f"[green]✓ Видео уникализировано:[/green] {res.path}\n"
             f"  Размер: {res.size_bytes / 1024:.1f} КБ | SHA-256: {res.sha256}"
         )
-    elif ext in (".jpg", ".jpeg", ".png"):
-        res_list = uniquify_photos([media_path], cfg.uniquifier)
+    elif ext in (".jpg", ".jpeg", ".png", ".webp"):
+        res_list = uniquify_photos([media_path], cfg.uniquifier, mode_override=mode)
         res = res_list[0]
         console.print(
-            f"[green]✓ Фото уникализировано:[/green] {res.path}\n"
+            f"[green]✓ Фото уникализировано (mode={mode}):[/green] {res.path}\n"
             f"  Размер: {res.size_bytes / 1024:.1f} КБ | SHA-256: {res.sha256}"
         )
     else:
-        raise typer.BadParameter("Поддерживаются форматы .mp4, .jpg, .jpeg, .png")
+        raise typer.BadParameter("Поддерживаются форматы .mp4, .jpg, .jpeg, .png, .webp")
+
+
+@app.command("campaign")
+def campaign_command(
+    media: Annotated[list[Path], typer.Option("--media", "-m", help="Путь к слайдам (1–10 фото) или одному .mp4 видео")],
+    description: Annotated[str, typer.Option("--desc", "-d", help="Описание и хэштеги (поддерживает спинтакс + {RAND4})")] = "#piratetoken #piratetokenshop #blackknight #pirateshop #fyp",
+    accounts: Annotated[list[str] | None, typer.Option("--account", "-a", help="Конкретные account_id (можно несколько; пусто = все)")] = None,
+    threads: Annotated[int, typer.Option("--threads", "-t", help="Параллельных потоков (1–20)")] = 5,
+    copies: Annotated[int, typer.Option("--copies", help="Постов на аккаунт (1–30)")] = 6,
+    photo_mode: Annotated[str, typer.Option("--photo-mode", help="Пресет фото-уникализатора (minimal_snow/minimal/stealth/medium/boosted/ultra_hard/off)")] = "minimal_snow",
+    restart_every: Annotated[int, typer.Option("--restart-every", help="Холодный перезапуск TikTok каждые N постов (0 = выкл)")] = 3,
+    delay_min: Annotated[float, typer.Option("--delay-min", help="Мин. пауза между постами (сек)")] = 14.0,
+    delay_max: Annotated[float, typer.Option("--delay-max", help="Макс. пауза между постами (сек)")] = 20.0,
+    region: Annotated[str, typer.Option("--region", "-r", help="Целевой регион залива (например US, IT; пусто = из аккаунта)")] = "US",
+    app_locale: Annotated[str, typer.Option("--locale", help="Локаль приложения (например en_US, it_IT)")] = "",
+    music_query: Annotated[str, typer.Option("--music", help="Поиск музыки для авто-пула (например Fortnite)")] = "Fortnite",
+    randomize_tags: Annotated[bool, typer.Option("--randomize-tags/--no-randomize-tags")] = True,
+    delete_old: Annotated[bool, typer.Option("--delete-old/--keep-old")] = True,
+    auto_appeal: Annotated[bool, typer.Option("--auto-appeal/--no-auto-appeal", help="3-этапный Auto-Appeal 2048 (до / между / после)")] = True,
+    quiet_window: Annotated[float, typer.Option("--quiet-window", help="Окно тишины пост-заливного Auto-Appeal (сек)")] = 60.0,
+    pin_sticky_proxy: Annotated[bool, typer.Option("--sticky-proxy", help="Закрепить sticky-сессию на bpproxy")] = False,
+    override_proxy_country: Annotated[str, typer.Option("--proxy-country", help="Опционально переключить _country-XX на прокси (пусто = не менять!)")] = "",
+    config: Annotated[Path | None, typer.Option("--config", "-c")] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """🚀 5-поточный анти-теневой пролив (minimal_snow + рестарт TikTok после N постов + 3-этапный Auto-Appeal 2048)."""
+    from kintaro_auto.models import CampaignConfig
+
+    _setup_logging(verbose)
+    cfg, store = _init_env(config)
+    first_ext = media[0].suffix.lower() if media else ".jpg"
+    camp = CampaignConfig(
+        account_ids=list(accounts or []),
+        media_type="video" if first_ext == ".mp4" else "photo",
+        media_paths=[str(p) for p in media],
+        description=description,
+        randomize_tags=randomize_tags,
+        copies_count=copies,
+        threads=threads,
+        delay_min_sec=delay_min,
+        delay_max_sec=delay_max,
+        restart_every_n=restart_every,
+        region=region,
+        phone_region=region,
+        app_locale=app_locale,
+        pin_sticky_proxy=pin_sticky_proxy,
+        override_proxy_country=override_proxy_country,
+        delete_old_posts=delete_old,
+        photo_mode=photo_mode,
+        auto_music_query=music_query,
+        auto_appeal_2048=auto_appeal,
+        appeal_quiet_window_sec=quiet_window,
+    )
+
+    async def _run() -> None:
+        async with KintaroClient(cfg) as client:
+            pipeline = AutomationPipeline(cfg, store, client)
+            results = await pipeline.run_anti_shadow_campaign(camp)
+
+        tbl = Table(title=f"Итог кампании ({len(results)} акк. | {photo_mode} | {threads} пот.)")
+        tbl.add_column("Account", style="bold cyan")
+        tbl.add_column("Статус")
+        tbl.add_column("Посты")
+        tbl.add_column("Апелляции 2048")
+        tbl.add_column("Папка")
+        tbl.add_column("Просмотры")
+        for r in results:
+            tbl.add_row(
+                r.account_id,
+                f"[green]{r.status}[/green]" if r.status == "completed" else f"[yellow]{r.status}[/yellow]",
+                f"{r.posts_published}/{r.target_posts}",
+                str(r.appeals_sent),
+                r.folder_key or "—",
+                str(r.initial_views),
+            )
+        console.print(tbl)
+
+    asyncio.run(_run())
+
+
+@app.command("restart-app")
+def restart_app_command(
+    account_id: Annotated[str | None, typer.Option("--account", "-a", help="Конкретный account_id (пусто = все авторизованные)")] = None,
+    region: Annotated[str, typer.Option("--region", "-r", help="Целевой SIM-регион после рестарта")] = "",
+    config: Annotated[Path | None, typer.Option("--config", "-c")] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """🔄 Холодный перезапуск приложения TikTok (ротация session_id + update_hosts + launch report + token_beat)."""
+    _setup_logging(verbose)
+    cfg, store = _init_env(config)
+    targets = [store.load_account(account_id)] if account_id else [a for a in store.list_accounts() if a.authenticated]
+
+    async def _run() -> None:
+        async with KintaroClient(cfg) as client:
+            pipeline = AutomationPipeline(cfg, store, client)
+            for acc in targets:
+                await pipeline.restart_tiktok_app(acc, target_region=region)
+                console.print(f"[green]✓ [{acc.account_id}] Приложение TikTok перезапущено[/green]")
+
+    asyncio.run(_run())
+
+
+@app.command("clean-posts")
+def clean_posts_command(
+    account_id: Annotated[str | None, typer.Option("--account", "-a", help="Конкретный account_id (пусто = все авторизованные)")] = None,
+    config: Annotated[Path | None, typer.Option("--config", "-c")] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """🗑 Удалить все старые посты аккаунта перед свежим проливом."""
+    _setup_logging(verbose)
+    cfg, store = _init_env(config)
+    targets = [store.load_account(account_id)] if account_id else [a for a in store.list_accounts() if a.authenticated]
+
+    async def _run() -> None:
+        async with KintaroClient(cfg) as client:
+            pipeline = AutomationPipeline(cfg, store, client)
+            for acc in targets:
+                cnt = await pipeline.delete_all_account_posts(acc)
+                console.print(f"[green]✓ [{acc.account_id}] Удалено постов: {cnt}[/green]")
+
+    asyncio.run(_run())
+
+
+@app.command("spy")
+def spy_command(
+    username: Annotated[str, typer.Argument(help="TikTok @username конкурента для анализа")],
+    account_id: Annotated[str | None, typer.Option("--account", "-a", help="Через какой авторизованный аккаунт делать запрос")] = None,
+    count: Annotated[int, typer.Option("--count", "-n", help="Сколько постов проанализировать (1–35)")] = 18,
+    config: Annotated[Path | None, typer.Option("--config", "-c")] = None,
+) -> None:
+    """🕵️ Анализ конкурента: просмотры, средние/макс охваты, топ хэштеги и вирусные Music ID."""
+    from kintaro_auto.spy import spy_competitor_profile
+
+    cfg, store = _init_env(config)
+    acc = store.load_account(account_id) if account_id else next((a for a in store.list_accounts() if a.authenticated), None)
+    if acc is None:
+        raise typer.BadParameter("Нет авторизованного аккаунта для выполнения Spy-запроса.")
+
+    async def _run() -> None:
+        async with KintaroClient(cfg) as client:
+            data = await spy_competitor_profile(client, acc, username, count=count)
+        console.print(
+            f"[bold cyan]@{data['username']}[/bold cyan] ({data['nickname']}) | "
+            f"Подписчики: {data['followers']} | Постов: {data['posts_scanned']} | "
+            f"Всего просм.: [bold]{data['total_views']}[/bold] | Средние: {data['avg_views']} | Макс: {data['max_views']}"
+        )
+        if data["top_hashtags"]:
+            console.print("  [bold]Топ хэштеги:[/bold] " + " ".join(f"{x['tag']}({x['count']})" for x in data["top_hashtags"][:10]))
+        if data["top_music"]:
+            console.print("  [bold]Топ треки:[/bold]")
+            for m in data["top_music"][:5]:
+                console.print(f"    • {m['label']} (id={m['music_id']}, ×{m['count']})")
+
+    asyncio.run(_run())
+
+
+@app.command("totp")
+def totp_command(
+    secret: Annotated[str, typer.Argument(help="Base32 TOTP секрет (16–32 символа)")],
+) -> None:
+    """🔐 Сгенерировать живой 6-значный TOTP 2FA-код и таймер обновления."""
+    from kintaro_auto.spy import generate_live_totp
+
+    res = generate_live_totp(secret)
+    console.print(f"[bold green]{res['code']}[/bold green] (осталось {res['remaining_sec']}с)")
 
 
 @app.command("web")
@@ -979,12 +1145,12 @@ def run_web_dashboard(
     port: Annotated[int, typer.Option("--port", "-p", help="Порт веб-панели")] = 8080,
     config: Annotated[Path | None, typer.Option("--config", "-c")] = None,
 ) -> None:
-    """Запустить красивую веб-панель управления (Control & Unban Center) на http://127.0.0.1:8080."""
+    """Запустить веб-панель управления KINTARO FARM OS v4.0 (Campaign + Unban + Spy + Outlook Hub)."""
     import uvicorn
     from kintaro_auto.web import create_web_app
 
     console.print(
-        f"[bold green]🚀 Веб-панель KINTARO Control & Unban Center запущена:[/bold green] "
+        f"[bold green]🚀 Веб-панель KINTARO FARM OS v4.0 запущена:[/bold green] "
         f"[bold cyan]http://{host}:{port}[/bold cyan]"
     )
     uvicorn.run(create_web_app(config), host=host, port=port, log_level="warning")

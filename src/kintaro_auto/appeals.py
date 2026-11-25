@@ -7,12 +7,14 @@ import os
 import random
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse, urlsplit
 
 import httpx
 from playwright.async_api import BrowserContext, Page, async_playwright
 
+from kintaro_auto.captions import resolve_spintax
 from kintaro_auto.models import AccountRecord
 
 logger = logging.getLogger("kintaro_auto")
@@ -108,6 +110,7 @@ PUNISH_TYPE_NAMES: dict[int, str] = {
     2048: "AccountIneligibleForRecommendation (Account FYP Restriction)",
 }
 
+NOTICE_APPEAL_STAGGER_SECONDS: tuple[float, float] = (1.5, 3.5)
 APPEAL_STAGGER_SECONDS: tuple[float, float] = (8.5, 17.5)
 WATCH_POLL_SECONDS: tuple[float, float] = (95.0, 165.0)
 
@@ -453,12 +456,24 @@ async def probe_proxy_geo(proxy_url: str) -> tuple[str, str]:
         return ip_val, loc_val
 
 
+def _is_account_ineligible_notice(vio: NoticeViolation) -> bool:
+    tl = (vio.title or "").lower()
+    if vio.punish_type == 2048:
+        return True
+    return (
+        "account ineligible for recommendation" in tl
+        or "account eligible for recommendation" in tl
+        or "ineligible for the for you feed" in tl
+    )
+
+
 async def audit_account_restrictions(
     account: AccountRecord,
     *,
     extra_post_ids: list[str] | None = None,
     max_posts: int = 50,
     verify_proxy_trace: bool = True,
+    only_account_ineligible: bool = False,
 ) -> AccountAuditResult:
     """
     Fast pure-HTTP audit over the account's sticky SOCKS5/HTTP proxy:
@@ -540,18 +555,19 @@ async def audit_account_restrictions(
 
         # Discover Account Updates notice groups only (`filter_type` 33 & 51 + 47/661) to avoid unrelated tabs
         groups: set[int] = set(CORE_SYSTEM_NOTICE_GROUPS)
-        try:
-            r_cnt = await http.get(
-                f"{idc_gw}/aweme/v1/notice/count/",
-                params={**MOBILE_BASE_PARAMS, "source": "1"},
-            )
-            if r_cnt.status_code == 200:
-                for flt in r_cnt.json().get("groups_in_filters") or []:
-                    if flt.get("filter_type") in (33, 51):
-                        for g in flt.get("groups") or []:
-                            groups.add(int(g))
-        except Exception:
-            pass
+        if not only_account_ineligible:
+            try:
+                r_cnt = await http.get(
+                    f"{idc_gw}/aweme/v1/notice/count/",
+                    params={**MOBILE_BASE_PARAMS, "source": "1"},
+                )
+                if r_cnt.status_code == 200:
+                    for flt in r_cnt.json().get("groups_in_filters") or []:
+                        if flt.get("filter_type") in (33, 51):
+                            for g in flt.get("groups") or []:
+                                groups.add(int(g))
+            except Exception:
+                pass
 
         raw_notices: list[tuple[int, dict[str, Any]]] = []
         sorted_groups = sorted(groups)
@@ -679,6 +695,8 @@ async def audit_account_restrictions(
                 schema_url=falcon_url or raw_schema,
                 web_schema_url=web_schema,
             )
+            if only_account_ineligible and not _is_account_ineligible_notice(vio):
+                continue
             parsed_candidates.append(vio)
 
         # Mark already-resolved punish_ids without extra roundtrips; enrich others concurrently
@@ -709,57 +727,61 @@ async def audit_account_restrictions(
             else:
                 audit.notice_violations.append(vio)
 
-        # Scan TikTok Studio posts via pure HTTP (`/tiktok/creator/manage/item_list/v1/`)
+        # Scan TikTok Studio posts via pure HTTP (`/tiktok/creator/manage/item_list/v1/`) unless in fast 2048-only mode
         post_map: dict[str, PostPenalty] = {}
-        try:
-            r_items = await http.post(
-                f"{WWW_BASE}/tiktok/creator/manage/item_list/v1/",
-                params={"aid": "1988", "app_name": "tiktok_creator_center", "device_platform": "web_pc"},
-                json={
-                    "cursor": 0,
-                    "size": max_posts,
-                    "query": {
-                        "sort_orders": [{"field_name": "post_time", "order": 2}],
-                        "conditions": [],
-                        "is_recent_posts": False,
+        if not only_account_ineligible:
+            try:
+                r_items = await http.post(
+                    f"{WWW_BASE}/tiktok/creator/manage/item_list/v1/",
+                    params={"aid": "1988", "app_name": "tiktok_creator_center", "device_platform": "web_pc"},
+                    json={
+                        "cursor": 0,
+                        "size": max_posts,
+                        "query": {
+                            "sort_orders": [{"field_name": "post_time", "order": 2}],
+                            "conditions": [],
+                            "is_recent_posts": False,
+                        },
                     },
-                },
-            )
-            if r_items.status_code == 200:
-                for it in r_items.json().get("item_list") or []:
-                    vid = str(it.get("item_id") or "")
-                    if vid:
-                        post_map[vid] = PostPenalty(
-                            item_id=vid,
-                            create_time=int(it.get("create_time") or 0),
-                            desc=str(it.get("desc") or ""),
-                            play_count=int(it.get("play_count") or 0),
-                        )
-        except Exception:
-            pass
-
-        for extra_vid in extra_post_ids or []:
-            if extra_vid and extra_vid not in post_map:
-                post_map[extra_vid] = PostPenalty(item_id=extra_vid, create_time=0, desc="", play_count=0)
-        for rec in account.upload_history:
-            if rec.aweme_id and rec.aweme_id not in post_map:
-                post_map[rec.aweme_id] = PostPenalty(
-                    item_id=rec.aweme_id,
-                    create_time=0,
-                    desc=rec.description,
-                    play_count=rec.last_play_count or 0,
                 )
+                if r_items.status_code == 200:
+                    for it in r_items.json().get("item_list") or []:
+                        vid = str(it.get("item_id") or "")
+                        if vid:
+                            post_map[vid] = PostPenalty(
+                                item_id=vid,
+                                create_time=int(it.get("create_time") or 0),
+                                desc=str(it.get("desc") or ""),
+                                play_count=int(it.get("play_count") or 0),
+                            )
+            except Exception:
+                pass
 
-        audit.total_posts = len(post_map)
-        sem = asyncio.Semaphore(5)
+            for extra_vid in extra_post_ids or []:
+                if extra_vid and extra_vid not in post_map:
+                    post_map[extra_vid] = PostPenalty(item_id=extra_vid, create_time=0, desc="", play_count=0)
+            for rec in account.upload_history:
+                if rec.aweme_id and rec.aweme_id not in post_map:
+                    post_map[rec.aweme_id] = PostPenalty(
+                        item_id=rec.aweme_id,
+                        create_time=0,
+                        desc=rec.description,
+                        play_count=rec.last_play_count or 0,
+                    )
 
-        async def _check_one(p_obj: PostPenalty) -> None:
-            async with sem:
-                await _check_single_post_penalty_http(http, p_obj)
+            audit.total_posts = len(post_map)
+            sem = asyncio.Semaphore(5)
 
-        await asyncio.gather(*(_check_one(pp) for pp in post_map.values()))
-        audit.post_penalties = list(post_map.values())
-        audit.total_views = sum(p.play_count for p in audit.post_penalties)
+            async def _check_one(p_obj: PostPenalty) -> None:
+                async with sem:
+                    await _check_single_post_penalty_http(http, p_obj)
+
+            if post_map:
+                await asyncio.gather(*(_check_one(pp) for pp in post_map.values()))
+            audit.post_penalties = list(post_map.values())
+            audit.total_views = sum(p.play_count for p in audit.post_penalties)
+        else:
+            audit.total_posts = len(extra_post_ids or []) or len(account.upload_history)
 
         # Compute overall account health badge
         has_actionable = any(v.can_appeal or v.status_code == 1 for v in audit.notice_violations) or any(
@@ -816,7 +838,16 @@ def _find_chrome_executable(explicit: str | None = None) -> str:
     for cand in CHROME_CANDIDATES:
         if os.path.isfile(cand) and os.access(cand, os.X_OK):
             return cand
-    raise RuntimeError("Не найден установленный Google Chrome / Chromium (`/usr/bin/google-chrome`).")
+    # Fallback to Playwright's bundled Chromium (`~/.cache/ms-playwright/chromium-*/chrome-linux*/chrome`)
+    pw_cache = Path.home() / ".cache" / "ms-playwright"
+    if pw_cache.is_dir():
+        cands = sorted(pw_cache.glob("chromium-*/chrome-linux*/chrome"))
+        for c in reversed(cands):
+            if c.is_file() and os.access(c, os.X_OK):
+                return str(c)
+    raise RuntimeError(
+        "Не найден установленный Google Chrome / Chromium (`/usr/bin/google-chrome` или Playwright chromium)."
+    )
 
 
 async def _submit_notice_via_browser_webview(
@@ -1058,6 +1089,8 @@ async def remove_account_restrictions(
     appeal_text: str = "Our content is original, authentic, and strictly follows all TikTok Community Guidelines.",
     dry_run: bool = False,
     appeal_studio_posts: bool = False,
+    only_account_ineligible: bool = False,
+    verify_proxy_trace: bool = True,
     hide_rejected: bool = False,
     stagger_appeals: bool = True,
     chrome_executable: str | None = None,
@@ -1067,13 +1100,19 @@ async def remove_account_restrictions(
     1. Pure-HTTP Mobile IDC & Studio audit (`audit_account_restrictions`).
     2. Account Updates (`group=47/661`) appeals across ALL distinct `punish_id`s:
        `commit_appeal` -> `aweme/v2/appeal/commit/` -> Headless Chrome `BytedanceWebview` `tns-api`,
-       verified via `get_violation_detail`.
+       verified via `get_violation_detail` + fast auto-approval recheck.
     3. Studio Post appeals are OFF by default (`appeal_studio_posts=False`) per workflow;
        enable explicitly if needed.
     4. Optional `--hide-rejected`: switches `FAILED` (`appeal_status == 5`) posts to Private (`visibility_type=2`).
     """
-    logger.info("[%s] Запуск HTTP-аудита системных уведомлений (IDC) и постов Studio...", account.account_id)
-    audit = await audit_account_restrictions(account, extra_post_ids=post_ids)
+    scope_lbl = "2048 Account ineligible" if only_account_ineligible else "системных уведомлений (IDC) и постов Studio"
+    logger.info("[%s] Запуск HTTP-аудита %s...", account.account_id, scope_lbl)
+    audit = await audit_account_restrictions(
+        account,
+        extra_post_ids=post_ids,
+        verify_proxy_trace=verify_proxy_trace,
+        only_account_ineligible=only_account_ineligible,
+    )
     summary = AccountAppealSummary(account_id=account.account_id, audit=audit)
 
     cookies = extract_cookie_dict(account)
@@ -1090,6 +1129,7 @@ async def remove_account_restrictions(
         follow_redirects=True,
     ) as http:
         appeals_sent_count = 0
+        submitted_2048_notices: list[tuple[NoticeViolation, int]] = []
 
         # A. Process Notice / Account Violations
         for vio in audit.notice_violations:
@@ -1131,12 +1171,13 @@ async def remove_account_restrictions(
                 continue
 
             if stagger_appeals and appeals_sent_count > 0:
-                delay = random.uniform(*APPEAL_STAGGER_SECONDS)
+                delay = random.uniform(*NOTICE_APPEAL_STAGGER_SECONDS)
                 logger.info("[%s] Анти-спам пауза %.1fс перед следующей апелляцией...", account.account_id, delay)
                 await asyncio.sleep(delay)
 
             appeals_sent_count += 1
             prev_label = vio.status_label
+            cur_appeal_text = resolve_spintax(appeal_text or "")
 
             # Fetch mobile appeal reason options
             reasons: list[dict[str, Any]] = []
@@ -1159,7 +1200,7 @@ async def remove_account_restrictions(
             )
             reason_json = build_tns_appeal_reason_json(
                 appeal_reasons_options=reasons or None,
-                description_text=appeal_text,
+                description_text=cur_appeal_text,
             )
 
             body_v1: dict[str, Any] = {
@@ -1177,8 +1218,8 @@ async def remove_account_restrictions(
                 body_v1["AppealReasons"] = [str(selected_code)]
             if reason_json:
                 body_v1["reason"] = reason_json
-            if appeal_text:
-                body_v1["AppealDescription"] = appeal_text
+            if cur_appeal_text:
+                body_v1["AppealDescription"] = cur_appeal_text
 
             ok_notice = False
             channel_used = ""
@@ -1195,11 +1236,23 @@ async def remove_account_restrictions(
                     j1 = r1.json()
                     sc = j1.get("status_code", (j1.get("BaseResp") or {}).get("StatusCode", -1))
                     if sc == 0:
-                        await asyncio.sleep(1.5)
-                        await _enrich_violation_detail(http, audit.idc_gateway, vio, audit.uid)
-                        if vio.status_code in (4, 6) or not vio.can_appeal:
+                        vinfo_resp = j1.get("ViolationInfo") if isinstance(j1.get("ViolationInfo"), dict) else None
+                        resp_st = int((vinfo_resp or {}).get("Status") or 0)
+                        if resp_st in (4, 6):
+                            vio.status_code = resp_st
+                            vio.status_label = VIOLATION_V1_STATUS.get(resp_st, f"Status({resp_st})")
+                            vio.can_appeal = False
+                            if vinfo_resp and vinfo_resp.get("AppealId"):
+                                vio.appeal_id = str(vinfo_resp.get("AppealId"))
                             ok_notice = True
                             channel_used = "HTTP /api/violation/v1/commit_appeal"
+                        else:
+                            if stagger_appeals:
+                                await asyncio.sleep(1.2)
+                            await _enrich_violation_detail(http, audit.idc_gateway, vio, audit.uid)
+                            if vio.status_code in (4, 6) or not vio.can_appeal:
+                                ok_notice = True
+                                channel_used = "HTTP /api/violation/v1/commit_appeal"
                     else:
                         err_note = f"commit_appeal={sc}"
             except Exception as exc:
@@ -1239,7 +1292,7 @@ async def remove_account_restrictions(
                     vio.punish_id,
                 )
                 ok_web, web_msg = await _submit_notice_via_browser_webview(
-                    account, vio, reasons or None, appeal_text, chrome_executable
+                    account, vio, reasons or None, cur_appeal_text, chrome_executable
                 )
                 if ok_web:
                     await asyncio.sleep(1.5)
@@ -1252,6 +1305,7 @@ async def remove_account_restrictions(
             if ok_notice:
                 summary.notice_appeals_verified += 1
 
+            item_idx = len(summary.items)
             summary.items.append(
                 RestrictionActionReport(
                     account_id=account.account_id,
@@ -1269,6 +1323,22 @@ async def remove_account_restrictions(
                     ),
                 )
             )
+            if ok_notice and vio.status_code == 4 and _is_account_ineligible_notice(vio):
+                submitted_2048_notices.append((vio, item_idx))
+
+        # Single batch re-check for instant 2048 auto-approvals (4 -> 6 / 3) instead of serial sleeps per notice
+        if submitted_2048_notices and stagger_appeals:
+            await asyncio.sleep(2.5)
+            chk_sem = asyncio.Semaphore(6)
+
+            async def _recheck_2048(v_obj: NoticeViolation, idx: int) -> None:
+                async with chk_sem:
+                    await _enrich_violation_detail(http, audit.idc_gateway, v_obj, audit.uid)
+                    if v_obj.status_code in (3, 6):
+                        rep = summary.items[idx]
+                        rep.detail = f"Апелляция принята ({rep.action_taken}) -> {v_obj.status_label}"
+
+            await asyncio.gather(*(_recheck_2048(v_obj, idx) for v_obj, idx in submitted_2048_notices))
 
         # B. Process TikTok Studio Per-Post FYP Restrictions ONLY if explicitly enabled (`appeal_studio_posts=True`)
         for pp in audit.post_penalties:
@@ -1459,16 +1529,21 @@ async def remove_account_restrictions(
 async def wait_and_appeal_settle(
     account: AccountRecord,
     *,
-    appeal_text: str = "Our content is original, authentic, and strictly follows all TikTok Community Guidelines.",
+    appeal_text: str = (
+        "{Our content is original, authentic, and strictly follows all TikTok Community Guidelines.|"
+        "Original content created and edited exclusively by our team.}"
+    ),
     appeal_studio_posts: bool = False,
+    only_account_ineligible: bool = False,
+    verify_proxy_trace: bool = False,
     hide_rejected: bool = False,
     quiet_seconds: float = 60.0,
     max_wait_seconds: float = 240.0,
-    poll_interval_seconds: float = 14.0,
+    poll_interval_seconds: float = 8.0,
 ) -> AccountAppealSummary:
     """
     Polls Account Updates (`group=47/661`) repeatedly after an upload wave so trickle restrictions
-    (0, 2, or up to 10+ notices arriving asynchronously over 1–3 minutes) are ALL caught and appealed.
+    (0, 2, or up to 16+ notices arriving asynchronously over 1–3 minutes) are ALL caught and appealed.
     Stops once `quiet_seconds` pass with zero newly arrived appealable `punish_id`s or `max_wait_seconds` elapses.
     """
     start_ts = time.monotonic()
@@ -1479,23 +1554,32 @@ async def wait_and_appeal_settle(
     total_notice_verified = 0
     total_post_verified = 0
     total_hidden = 0
+    restored_confirm_checks = 0
 
     while True:
         s = await remove_account_restrictions(
             account,
             appeal_text=appeal_text,
             appeal_studio_posts=appeal_studio_posts,
+            only_account_ineligible=only_account_ineligible,
+            verify_proxy_trace=verify_proxy_trace,
             hide_rejected=hide_rejected,
             stagger_appeals=True,
         )
         if s.audit:
             last_audit = s.audit
         new_in_wave = False
+        active_appealable = 0
+        reviewing_cnt = 0
         if s.audit:
             for v in s.audit.notice_violations:
-                if (v.can_appeal or v.status_code == 1) and v.punish_id not in seen_appealable_ids:
-                    seen_appealable_ids.add(v.punish_id)
-                    new_in_wave = True
+                if v.can_appeal or v.status_code == 1:
+                    active_appealable += 1
+                    if v.punish_id not in seen_appealable_ids:
+                        seen_appealable_ids.add(v.punish_id)
+                        new_in_wave = True
+                elif v.status_code == 4:
+                    reviewing_cnt += 1
         if s.notice_appeals_verified or s.post_appeals_verified:
             new_in_wave = True
             total_notice_verified += s.notice_appeals_verified
@@ -1508,19 +1592,34 @@ async def wait_and_appeal_settle(
         now_ts = time.monotonic()
         if new_in_wave:
             last_activity_ts = now_ts
+            restored_confirm_checks = 0
         elapsed = now_ts - start_ts
         idle = now_ts - last_activity_ts
 
-        if elapsed >= max_wait_seconds or (idle >= quiet_seconds and elapsed >= quiet_seconds):
+        # Smart fast-exit when 2048 waves have all been approved and 2 clean checks confirm no new wave
+        if (
+            only_account_ineligible
+            and not new_in_wave
+            and active_appealable == 0
+            and reviewing_cnt == 0
+            and total_notice_verified > 0
+        ):
+            restored_confirm_checks += 1
+            if restored_confirm_checks >= 2 and idle >= min(20.0, quiet_seconds):
+                break
+
+        if quiet_seconds <= 0 and active_appealable == 0:
+            break
+        if elapsed >= max_wait_seconds or (idle >= quiet_seconds and elapsed >= quiet_seconds and active_appealable == 0):
             break
         logger.info(
-            "[%s] Ожидание волны огранов: подано=%d, тишина=%.0f/%.0fс (прошло %.0f/%.0fс)...",
+            "[%s] Ожидание волны огранов: подано=%d, активных=%d, на проверке=%d, тишина=%.0f/%.0fс...",
             account.account_id,
             total_notice_verified,
+            active_appealable,
+            reviewing_cnt,
             idle,
             quiet_seconds,
-            elapsed,
-            max_wait_seconds,
         )
         await asyncio.sleep(poll_interval_seconds)
 
@@ -1532,6 +1631,152 @@ async def wait_and_appeal_settle(
         post_appeals_verified=total_post_verified,
         posts_hidden=total_hidden,
     )
+
+
+# ── 4. Automatic 4-Folder Account Sorter (`state/sorted_accounts/`) ──────────
+
+SORTED_FOLDER_SPECS: dict[str, dict[str, str]] = {
+    "clean": {"title": "Без ограна / Снят", "filename": "clean_accounts.txt"},
+    "ogran_na_proverke": {"title": "Огран / На проверке", "filename": "reviewing_accounts.txt"},
+    "ogran_ne_snyat": {"title": "Огран не снят / Отклонён", "filename": "restricted_accounts.txt"},
+    "errors": {"title": "Ошибки входа / Сессии", "filename": "error_accounts.txt"},
+}
+
+
+def classify_appeal_folder(audit: AccountAuditResult | None, *, had_error: bool = False) -> tuple[str, str]:
+    if had_error or audit is None:
+        return "errors", SORTED_FOLDER_SPECS["errors"]["title"]
+    rem = sum(1 for v in audit.notice_violations if v.can_appeal or v.status_code == 1)
+    fld = sum(1 for v in audit.notice_violations if v.status_code == 7)
+    rev = sum(1 for v in audit.notice_violations if v.status_code == 4)
+    if rem > 0 or fld > 0:
+        return "ogran_ne_snyat", SORTED_FOLDER_SPECS["ogran_ne_snyat"]["title"]
+    if rev > 0:
+        return "ogran_na_proverke", SORTED_FOLDER_SPECS["ogran_na_proverke"]["title"]
+    return "clean", SORTED_FOLDER_SPECS["clean"]["title"]
+
+
+def sort_account_into_folder(
+    state_dir: Path,
+    folder_key: str,
+    account: AccountRecord,
+    *,
+    note: str = "",
+) -> Path:
+    """Places account entry + session JSON copy into `state/sorted_accounts/<folder_key>/` and deduplicates across folders."""
+    spec = SORTED_FOLDER_SPECS.get(folder_key, SORTED_FOLDER_SPECS["errors"])
+    root = Path(state_dir) / "sorted_accounts"
+    key_id = (account.username or account.account_id).strip()
+    line_text = (account.raw_line or f"{key_id}:{account.email or account.region}").strip()
+    if note and folder_key == "errors":
+        line_text = f"{line_text} # {note}"
+
+    # Remove stale entry from other folders first
+    for fkey, fspec in SORTED_FOLDER_SPECS.items():
+        fdir = root / fkey
+        txt_file = fdir / fspec["filename"]
+        if txt_file.exists():
+            lines = [
+                ln for ln in txt_file.read_text(encoding="utf-8").splitlines()
+                if ln.strip() and not ln.strip().lower().startswith(f"{key_id.lower()}:") and ln.strip().lower() != key_id.lower()
+            ]
+            txt_file.write_text(("\n".join(lines) + "\n") if lines else "", encoding="utf-8")
+        sess_copy = fdir / "sessions" / f"{account.account_id}.json"
+        if fkey != folder_key and sess_copy.exists():
+            sess_copy.unlink(missing_ok=True)
+
+    target_dir = root / folder_key
+    (target_dir / "sessions").mkdir(parents=True, exist_ok=True)
+    target_txt = target_dir / spec["filename"]
+    existing = target_txt.read_text(encoding="utf-8").splitlines() if target_txt.exists() else []
+    existing.append(line_text)
+    target_txt.write_text("\n".join(existing) + "\n", encoding="utf-8")
+    (target_dir / "sessions" / f"{account.account_id}.json").write_text(
+        account.model_dump_json(indent=2), encoding="utf-8"
+    )
+    return target_txt
+
+
+def get_sorted_folders_summary(state_dir: Path) -> list[dict[str, Any]]:
+    root = Path(state_dir) / "sorted_accounts"
+    out: list[dict[str, Any]] = []
+    for fkey, spec in SORTED_FOLDER_SPECS.items():
+        fdir = root / fkey
+        txt = fdir / spec["filename"]
+        lines = [ln.strip() for ln in txt.read_text(encoding="utf-8").splitlines() if ln.strip()] if txt.exists() else []
+        out.append(
+            {
+                "key": fkey,
+                "title": spec["title"],
+                "count": len(lines),
+                "file": str(txt),
+                "accounts": [ln.split(":", 1)[0] for ln in lines[:50]],
+            }
+        )
+    return out
+
+
+async def list_studio_post_ids(
+    account: AccountRecord,
+    *,
+    max_posts: int = 200,
+) -> list[str]:
+    """
+    Lists ALL posts in TikTok Studio (public, private, under-review, restricted)
+    via pure-HTTP `/tiktok/creator/manage/item_list/v1/` with cursor pagination (0$ Kintaro cost).
+    """
+    cookies = extract_cookie_dict(account)
+    headers = {
+        "user-agent": DESKTOP_CHROME_UA,
+        "accept": "application/json, text/plain, */*",
+    }
+    found: list[str] = []
+    seen: set[str] = set()
+    cursor: int | str = 0
+
+    async with httpx.AsyncClient(
+        proxy=account.proxy,
+        cookies=cookies,
+        headers=headers,
+        timeout=22.0,
+        follow_redirects=True,
+    ) as http:
+        for _ in range(10):
+            if len(found) >= max_posts:
+                break
+            page_size = min(50, max_posts - len(found))
+            resp = await http.post(
+                f"{WWW_BASE}/tiktok/creator/manage/item_list/v1/",
+                params={"aid": "1988", "app_name": "tiktok_creator_center", "device_platform": "web_pc"},
+                json={
+                    "cursor": cursor,
+                    "size": page_size,
+                    "query": {
+                        "sort_orders": [{"field_name": "post_time", "order": 2}],
+                        "conditions": [],
+                        "is_recent_posts": False,
+                    },
+                },
+            )
+            if resp.status_code != 200:
+                break
+            data = resp.json()
+            items = data.get("item_list") or []
+            added_this_page = 0
+            for it in items:
+                vid = str(it.get("item_id") or "").strip()
+                if vid and vid not in seen:
+                    seen.add(vid)
+                    found.append(vid)
+                    added_this_page += 1
+            has_more = bool(data.get("has_more"))
+            next_cursor = data.get("cursor")
+            if not has_more or added_this_page == 0 or next_cursor is None or next_cursor == cursor:
+                break
+            cursor = next_cursor
+        _merge_refreshed_cookies(account, http.cookies)
+
+    return found
 
 
 async def set_post_visibility(account: AccountRecord, item_id: str, *, private: bool = True) -> tuple[bool, str]:

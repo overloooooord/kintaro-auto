@@ -101,6 +101,7 @@ class KintaroClient:
         allow_auth_403: bool = False,
         is_device_endpoint: bool = False,
         proxy_override: str | None = None,
+        max_retries_override: int | None = None,
     ) -> dict[str, Any]:
         headers: dict[str, str] = {"x-proxy": proxy_override or account.proxy}
         if include_device:
@@ -114,7 +115,7 @@ class KintaroClient:
         last_exc: Exception | None = None
         # Transient 500/502/503/504 (such as Kintaro's `Failed build ri_report.`) fail before Passport
         # and do not consume auth balance; retry up to max_retries.
-        attempts = max(1, self.config.api.max_retries)
+        attempts = max(1, max_retries_override if max_retries_override is not None else self.config.api.max_retries)
 
         for attempt in range(1, attempts + 1):
             try:
@@ -220,13 +221,18 @@ class KintaroClient:
         )
 
     async def new_session(
-        self, account: AccountRecord, *, proxy_override: str | None = None
+        self,
+        account: AccountRecord,
+        *,
+        proxy_override: str | None = None,
+        max_retries_override: int | None = None,
     ) -> dict[str, Any]:
         return await self._request(
             "POST",
             "/v1/device/new_session",
             account=account,
             proxy_override=proxy_override,
+            max_retries_override=max_retries_override,
         )
 
     async def device_report(self, account: AccountRecord, report_type: str) -> dict[str, Any]:
@@ -440,6 +446,32 @@ class KintaroClient:
             json_body={"image": image_base64},
         )
 
+    async def change_username(self, account: AccountRecord, username: str) -> dict[str, Any]:
+        return await self._request(
+            "POST",
+            "/v1/account/change_username",
+            account=account,
+            json_body={"username": username.lstrip("@").strip()},
+        )
+
+    async def set_password(self, account: AccountRecord, password: str) -> dict[str, Any]:
+        return await self._request(
+            "POST",
+            "/v1/account/set_password",
+            account=account,
+            json_body={"password": password},
+        )
+
+    async def enable_totp(
+        self, account: AccountRecord, additional_way: str = "pwd"
+    ) -> dict[str, Any]:
+        return await self._request(
+            "POST",
+            "/v1/account/enable_totp",
+            account=account,
+            json_body={"additional_way": additional_way},
+        )
+
     # ── Feed, Inbox, Music & User (Warm-up & Discovery) ───────────────────────
 
     async def get_recommendations(
@@ -474,6 +506,8 @@ class KintaroClient:
         keyword: str,
         cursor: str = "0",
         count: int = 10,
+        *,
+        region_override: str | None = None,
     ) -> dict[str, Any]:
         return await self._request(
             "GET",
@@ -483,18 +517,131 @@ class KintaroClient:
                 "keyword": keyword,
                 "cursor": cursor,
                 "count": str(count),
-                "region": account.region,
+                "region": (region_override or account.region).upper(),
             },
         )
 
     async def get_music_chart(
-        self, account: AccountRecord, cursor: str = "0", count: int = 30
+        self,
+        account: AccountRecord,
+        cursor: str = "0",
+        count: int = 30,
+        *,
+        region_override: str | None = None,
     ) -> dict[str, Any]:
         return await self._request(
             "GET",
             "/v1/music/chart",
             account=account,
-            params={"cursor": cursor, "count": str(count), "region": account.region},
+            params={
+                "cursor": cursor,
+                "count": str(count),
+                "region": (region_override or account.region).upper(),
+            },
+        )
+
+    async def build_music_pool(
+        self,
+        account: AccountRecord,
+        keyword: str = "Fortnite",
+        *,
+        region_override: str | None = None,
+    ) -> list[dict[str, str]]:
+        """
+        Builds a deduplicated pool of playable TikTok music tracks (`id`, `title`, `author`)
+        combining live `/v1/music/search`, `/v1/music/chart`, and verified fallbacks.
+        """
+        eff_region = (region_override or account.region).upper().strip()
+        pool: list[dict[str, str]] = []
+        seen_ids: set[str] = set()
+        non_en_markers = (
+            "alkuperäinen", "оригинальный", "orijinal", "dźwięk",
+            "suono originale", "son original", "som original",
+            "originalton", "sunet original", "originální",
+        )
+
+        def _add(m: Any) -> None:
+            if not isinstance(m, dict):
+                return
+            if isinstance(m.get("music"), dict):
+                m = m["music"]
+            mid = str(m.get("id_str") or m.get("mid") or m.get("id") or "").strip()
+            if not mid or not mid.isdigit() or mid in seen_ids:
+                return
+            if m.get("mute_share") or (m.get("prevent_download") is True and m.get("music_status") == 0):
+                return
+            if int(m.get("duration") or 15) < 6:
+                return
+            title_str = str(m.get("title") or "Original Sound").strip()
+            author_str = str(m.get("author") or "TikTok").strip()
+            if eff_region in ("US", "GB", "CA", "AU") and any(b in title_str.lower() for b in non_en_markers):
+                return
+            seen_ids.add(mid)
+            pool.append({"id": mid, "title": title_str, "author": author_str})
+
+        kw = (keyword or "").strip()
+        if kw and kw.lower() not in ("recommended", "chart", "auto", "предложенные"):
+            try:
+                res = await self.search_music(account, keyword=kw, count=25, region_override=eff_region)
+                for entry in res.get("music_info_list") or res.get("music") or []:
+                    if isinstance(entry, dict):
+                        for sub in entry.get("musics") or []:
+                            _add(sub)
+                        _add(entry.get("music") or entry)
+            except Exception:
+                pass
+
+        if len(pool) < 6:
+            try:
+                chart = await self.get_music_chart(account, count=25, region_override=eff_region)
+                for entry in chart.get("music_list") or chart.get("music_info_list") or chart.get("data") or []:
+                    _add(entry)
+            except Exception:
+                pass
+
+        if len(pool) < 6 and kw.lower() == "fortnite":
+            for fb in (
+                {"id": "7436971510241167377", "title": "Fortnite Og Mode", "author": "Aye Brown"},
+                {"id": "6891415646903470081", "title": "Fortnite - Battle Royale - Original Main Theme", "author": "Geek Music"},
+                {"id": "6782722012662990849", "title": "Smooth Moves", "author": "Fortnite"},
+                {"id": "6902489124184262657", "title": "Fortnite", "author": "Trap Baby"},
+                {"id": "7289836584265255686", "title": "OG music", "author": "Fortnite_MusicPack"},
+                {"id": "7253513478835620635", "title": "Lobby Classic", "author": "Fortnite Music!"},
+            ):
+                if fb["id"] not in seen_ids:
+                    seen_ids.add(fb["id"])
+                    pool.append(fb)
+        return pool
+
+    async def get_user_profile(self, account: AccountRecord, username: str) -> dict[str, Any]:
+        return await self._request(
+            "GET",
+            "/v1/user/get",
+            account=account,
+            params={"username": username.lstrip("@").strip()},
+        )
+
+    async def get_user_posts(
+        self,
+        account: AccountRecord,
+        username: str,
+        count: int = 18,
+        max_cursor: str = "0",
+        *,
+        region_override: str | None = None,
+    ) -> dict[str, Any]:
+        params: dict[str, str] = {
+            "username": username.lstrip("@").strip(),
+            "count": str(max(1, min(35, int(count)))),
+            "max_cursor": str(max_cursor),
+        }
+        if region_override or account.region:
+            params["region"] = (region_override or account.region).upper()
+        return await self._request(
+            "GET",
+            "/v1/user/posts",
+            account=account,
+            params=params,
         )
 
     async def follow_user(self, account: AccountRecord, username: str) -> dict[str, Any]:
@@ -523,6 +670,80 @@ class KintaroClient:
             "/v1/post/like",
             account=account,
             json_body={"aweme_id": str(aweme_id)},
+        )
+
+    async def collect_post(self, account: AccountRecord, aweme_id: str) -> dict[str, Any]:
+        return await self._request(
+            "POST",
+            "/v1/post/collect",
+            account=account,
+            json_body={"aweme_id": str(aweme_id)},
+        )
+
+    async def repost_post(self, account: AccountRecord, aweme_id: str) -> dict[str, Any]:
+        return await self._request(
+            "POST",
+            "/v1/post/repost",
+            account=account,
+            json_body={"aweme_id": str(aweme_id)},
+        )
+
+    async def delete_post(self, account: AccountRecord, aweme_id: str) -> dict[str, Any]:
+        return await self._request(
+            "POST",
+            "/v1/post/delete",
+            account=account,
+            json_body={"aweme_id": str(aweme_id).strip()},
+        )
+
+    async def change_post_visibility(
+        self, account: AccountRecord, aweme_id: str, visibility_type: int = 1
+    ) -> dict[str, Any]:
+        """POST /v1/post/change_visibility (`1` = Public, `2` = Private, `3` = Friends)."""
+        return await self._request(
+            "POST",
+            "/v1/post/change_visibility",
+            account=account,
+            json_body={"aweme_id": str(aweme_id).strip(), "type": int(visibility_type)},
+        )
+
+    async def publish_comment(
+        self,
+        account: AccountRecord,
+        aweme_id: str,
+        text: str = "",
+        *,
+        mentions: list[str] | None = None,
+        reply_id: str = "",
+        reply_to_reply_id: str = "",
+        image_base64: str = "",
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"aweme_id": str(aweme_id).strip()}
+        if text:
+            payload["text"] = text
+        if mentions:
+            payload["mentions"] = [m.lstrip("@").strip() for m in mentions if m.strip()]
+        if reply_id:
+            payload["reply_id"] = str(reply_id).strip()
+        if reply_to_reply_id:
+            payload["reply_to_reply_id"] = str(reply_to_reply_id).strip()
+        if image_base64:
+            payload["image_base64"] = image_base64
+        return await self._request(
+            "POST",
+            "/v1/comment/publish",
+            account=account,
+            json_body=payload,
+        )
+
+    async def like_comment(
+        self, account: AccountRecord, aweme_id: str, cid: str
+    ) -> dict[str, Any]:
+        return await self._request(
+            "POST",
+            "/v1/comment/like",
+            account=account,
+            json_body={"aweme_id": str(aweme_id).strip(), "cid": str(cid).strip()},
         )
 
     async def get_post_comments(
@@ -560,6 +781,7 @@ class KintaroClient:
         description: str = "",
         description_mentions: list[str] | None = None,
         music_id: str = "",
+        region_override: str | None = None,
         is_private: bool = False,
         disable_comments: bool = False,
         disable_duet: bool = False,
@@ -568,7 +790,7 @@ class KintaroClient:
         is_story: bool = False,
     ) -> dict[str, Any]:
         form_fields: dict[str, Any] = {
-            "region": account.region,
+            "region": (region_override or account.region).upper(),
             "description": description,
             "music_id": music_id,
             "is_private": "1" if is_private else "0",
@@ -600,6 +822,7 @@ class KintaroClient:
         description: str = "",
         description_mentions: list[str] | None = None,
         music_id: str = "",
+        region_override: str | None = None,
         is_private: bool = False,
         disable_comments: bool = False,
         disable_duet: bool = False,
@@ -608,7 +831,7 @@ class KintaroClient:
         is_story: bool = False,
     ) -> dict[str, Any]:
         form_fields: dict[str, Any] = {
-            "region": account.region,
+            "region": (region_override or account.region).upper(),
             "description": description,
             "music_id": music_id,
             "is_private": "1" if is_private else "0",

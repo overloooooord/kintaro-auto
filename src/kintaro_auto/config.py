@@ -43,7 +43,30 @@ class UniquifierSettings(BaseModel):
     ffmpeg_bin: str = "ffmpeg"
     ffprobe_bin: str = "ffprobe"
     temp_dir: str = "state/tmp_media"
-    # Imperceptible micro-transforms to break MD5/perceptual hash collisions across accounts
+    # Photo uniquifier preset: "minimal_snow" (default US FYP), "minimal", "stealth", "medium", "boosted", "ultra_hard", "custom", "off"
+    photo_mode: str = "minimal_snow"
+    # Optional fine-tuning overrides (None = inherit from `photo_mode` preset)
+    crop_x_min_pct: float | None = None
+    crop_x_max_pct: float | None = None
+    crop_y_min_pct: float | None = None
+    crop_y_max_pct: float | None = None
+    max_tilt_deg: float | None = None
+    snow_min_flakes: int | None = None
+    snow_max_flakes: int | None = None
+    enable_bokeh: bool | None = None
+    enable_wind_trail: bool | None = None
+    tone_jitter_pct: float | None = None
+    noise_sigma: float | None = None
+    vignette_pct: float | None = None
+    border_px: int | None = None
+    flip_horizontal: bool | None = None
+    perspective_pct: float | None = None
+    ambient_frame_pct: float | None = None
+    hue_shift_deg: float | None = None
+    light_leak_pct: float | None = None
+    chromatic_px: int | None = None
+    canvas_jitter_px: int | None = None
+    # Imperceptible video micro-transforms to break MD5/perceptual hash collisions across accounts
     crop_ratio_min: float = 0.985
     crop_ratio_max: float = 0.996
     brightness_shift_max: float = 0.018
@@ -53,7 +76,7 @@ class UniquifierSettings(BaseModel):
     video_crf_min: int = 19
     video_crf_max: int = 22
     photo_jpeg_quality_min: int = 90
-    photo_jpeg_quality_max: int = 96
+    photo_jpeg_quality_max: int = 95
 
 
 class ResponseMappingSettings(BaseModel):

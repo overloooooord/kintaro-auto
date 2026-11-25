@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import random
@@ -22,6 +23,7 @@ from kintaro_auto.appeals import (
     AccountAuditResult,
     audit_account_restrictions,
     extract_cookie_dict,
+    get_sorted_folders_summary,
     probe_proxy_geo,
     remove_account_restrictions,
     set_post_visibility,
@@ -30,9 +32,17 @@ from kintaro_auto.appeals import (
 from kintaro_auto.captions import prepare_description_and_mentions
 from kintaro_auto.client import KintaroClient
 from kintaro_auto.config import AppConfig, load_config
-from kintaro_auto.models import AccountRecord, UploadTask, apply_device_geo_profile
+from kintaro_auto.models import (
+    AccountRecord,
+    CampaignConfig,
+    UploadTask,
+    apply_device_geo_profile,
+)
 from kintaro_auto.pipeline import AutomationPipeline
+from kintaro_auto.presets import load_campaign_presets
+from kintaro_auto.spy import generate_live_totp, spy_competitor_profile
 from kintaro_auto.storage import StateStore, normalize_proxy_url, parse_shop_account_line
+from kintaro_auto.uniquifier import PHOTO_UNIQUIFIER_PRESETS, uniquify_photo_bytes
 
 logger = logging.getLogger("kintaro_auto")
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -99,6 +109,7 @@ def _write_config_toml(path: Path, cfg: AppConfig) -> None:
         "",
         "[uniquifier]",
         f"enabled = {_b(cfg.uniquifier.enabled)}",
+        f"photo_mode = {_q(cfg.uniquifier.photo_mode)}",
         f"ffmpeg_bin = {_q(cfg.uniquifier.ffmpeg_bin)}",
         f"ffprobe_bin = {_q(cfg.uniquifier.ffprobe_bin)}",
         f"temp_dir = {_q(cfg.uniquifier.temp_dir)}",
@@ -381,6 +392,16 @@ class SpintaxPreviewRequest(BaseModel):
 class WatchdogToggleRequest(BaseModel):
     enabled: bool
     hide_rejected: bool = True
+
+
+class SpyRequest(BaseModel):
+    username: str
+    account_id: str = ""
+    count: int = 18
+
+
+class TotpRequest(BaseModel):
+    secret: str
 
 
 class ConfigUpdateRequest(BaseModel):
@@ -1173,5 +1194,169 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
             if hub.watchdog_task:
                 hub.watchdog_task.cancel()
         return {"ok": True, "enabled": hub.watchdog_enabled}
+
+    # ── Merged swegby Studio Endpoints (Campaign v4, Presets, Uniquifier Preview, Restart, Clean, Spy, TOTP) ──
+
+    @app.get("/api/presets")
+    async def get_presets_and_folders() -> dict[str, Any]:
+        sdir = Path(hub.cfg.state_dir)
+        return {
+            "ok": True,
+            "campaign_presets": load_campaign_presets(sdir),
+            "photo_presets": PHOTO_UNIQUIFIER_PRESETS,
+            "sorted_folders": get_sorted_folders_summary(sdir),
+        }
+
+    @app.post("/api/uniquifier/preview")
+    async def preview_uniquifier_api(
+        file: UploadFile = File(...),
+        photo_mode: str = Form("minimal_snow"),
+    ) -> dict[str, Any]:
+        raw = await file.read()
+        if not raw:
+            raise HTTPException(status_code=400, detail="Пустой файл изображения.")
+        out_bytes = await asyncio.to_thread(uniquify_photo_bytes, raw, mode=photo_mode)
+        return {
+            "ok": True,
+            "mode": photo_mode,
+            "before_data_url": "data:image/jpeg;base64," + base64.b64encode(raw).decode("ascii"),
+            "after_data_url": "data:image/jpeg;base64," + base64.b64encode(out_bytes).decode("ascii"),
+            "before_kb": round(len(raw) / 1024.0, 1),
+            "after_kb": round(len(out_bytes) / 1024.0, 1),
+        }
+
+    @app.post("/api/accounts/{account_id}/restart")
+    async def restart_tiktok_account(account_id: str, region: str = "") -> dict[str, Any]:
+        acc = hub.store.load_account(account_id)
+        jid = hub.start_job(f"Холодный рестарт TikTok @{account_id}", total=1)
+        try:
+            async with KintaroClient(hub.cfg) as client:
+                pipeline = AutomationPipeline(hub.cfg, hub.store, client)
+                await pipeline.restart_tiktok_app(acc, target_region=region)
+            hub.push_event(f"[{account_id}] 🔄 Приложение TikTok перезапущено (cold boot)", "success", kind="audit_updated")
+            return {"ok": True, "account_id": account_id}
+        finally:
+            hub.step_job(jid)
+            hub.end_job(jid)
+
+    @app.post("/api/accounts/{account_id}/clean-posts")
+    async def clean_old_posts_account(account_id: str) -> dict[str, Any]:
+        acc = hub.store.load_account(account_id)
+        jid = hub.start_job(f"Очистка старых постов @{account_id}", total=1)
+        try:
+            async with KintaroClient(hub.cfg) as client:
+                pipeline = AutomationPipeline(hub.cfg, hub.store, client)
+                deleted = await pipeline.delete_all_account_posts(acc)
+            hub.push_event(f"[{account_id}] 🗑 Удалено старых постов: {deleted}", "success", kind="audit_updated")
+            return {"ok": True, "account_id": account_id, "deleted": deleted}
+        finally:
+            hub.step_job(jid)
+            hub.end_job(jid)
+
+    @app.post("/api/campaign/run")
+    async def run_campaign_api(
+        files: list[UploadFile] = File(...),
+        account_ids: str = Form(""),
+        description: str = Form("#piratetoken #piratetokenshop #blackknight #pirateshop #fyp"),
+        copies_count: int = Form(6),
+        threads: int = Form(5),
+        delay_min_sec: float = Form(14.0),
+        delay_max_sec: float = Form(20.0),
+        restart_every_n: int = Form(3),
+        region: str = Form("US"),
+        app_locale: str = Form("en_US"),
+        photo_mode: str = Form("minimal_snow"),
+        auto_music_query: str = Form("Fortnite"),
+        randomize_tags: bool = Form(True),
+        delete_old_posts: bool = Form(True),
+        auto_appeal_2048: bool = Form(True),
+        appeal_quiet_window_sec: float = Form(60.0),
+        pin_sticky_proxy: bool = Form(False),
+        override_proxy_country: str = Form(""),
+    ) -> dict[str, Any]:
+        if not files:
+            raise HTTPException(status_code=400, detail="Файлы не выбраны.")
+        tmp_dir = Path(tempfile.mkdtemp(prefix="kintaro_camp_"))
+        saved_paths: list[str] = []
+        for uf in files:
+            suffix = Path(uf.filename or "slide.jpg").suffix.lower() or ".jpg"
+            dest = tmp_dir / f"{uuid.uuid4().hex[:8]}{suffix}"
+            dest.write_bytes(await uf.read())
+            saved_paths.append(str(dest))
+
+        is_video = Path(saved_paths[0]).suffix.lower() == ".mp4"
+        targets = [x.strip() for x in account_ids.split(",") if x.strip()]
+        camp = CampaignConfig(
+            account_ids=targets,
+            media_type="video" if is_video else "photo",
+            media_paths=saved_paths,
+            description=description,
+            randomize_tags=randomize_tags,
+            copies_count=copies_count,
+            threads=threads,
+            delay_min_sec=delay_min_sec,
+            delay_max_sec=delay_max_sec,
+            restart_every_n=restart_every_n,
+            region=region,
+            phone_region=region,
+            app_locale=app_locale,
+            pin_sticky_proxy=pin_sticky_proxy,
+            override_proxy_country=override_proxy_country,
+            delete_old_posts=delete_old_posts,
+            photo_mode=photo_mode,
+            auto_music_query=auto_music_query,
+            auto_appeal_2048=auto_appeal_2048,
+            appeal_quiet_window_sec=appeal_quiet_window_sec,
+        )
+
+        total_accs = len(targets) if targets else max(1, len(hub.store.list_accounts()))
+        jid = hub.start_job(f"🚀 Кампания {copies_count}x ({photo_mode}, {threads} пот.)", total=total_accs)
+
+        async def _bg_campaign() -> None:
+            try:
+                async with KintaroClient(hub.cfg) as client:
+                    pipeline = AutomationPipeline(hub.cfg, hub.store, client)
+                    results = await pipeline.run_anti_shadow_campaign(
+                        camp,
+                        progress_cb=lambda aid, msg, meta: (
+                            hub.push_event(f"[{aid}] {msg}", "info", kind="audit_updated"),
+                            hub.step_job(jid) if meta.get("status") in ("completed", "partial", "error", "upload_failed") else None,
+                        ),
+                    )
+                ok_n = sum(1 for r in results if r.status == "completed")
+                tot_p = sum(r.posts_published for r in results)
+                tot_a = sum(r.appeals_sent for r in results)
+                hub.push_event(
+                    f"🏁 Кампания завершена: {ok_n}/{len(results)} акк. | постов={tot_p} | апелляций 2048={tot_a}",
+                    "success",
+                    kind="audit_updated",
+                )
+            except Exception as exc:
+                hub.push_event(f"❌ Ошибка кампании: {exc}", "error")
+            finally:
+                hub.end_job(jid)
+
+        asyncio.create_task(_bg_campaign())
+        return {"ok": True, "started": True, "job_id": jid, "accounts": total_accs}
+
+    @app.post("/api/spy")
+    async def spy_api(req: SpyRequest) -> dict[str, Any]:
+        acc = (
+            hub.store.load_account(req.account_id)
+            if req.account_id.strip()
+            else next((a for a in hub.store.list_accounts() if a.authenticated), None)
+        )
+        if acc is None:
+            raise HTTPException(status_code=400, detail="Нет авторизованного аккаунта для Spy-запроса.")
+        async with KintaroClient(hub.cfg) as client:
+            data = await spy_competitor_profile(client, acc, req.username, count=req.count)
+        return {"ok": True, "spy": data}
+
+    @app.post("/api/totp/generate")
+    async def totp_generate_api(req: TotpRequest) -> dict[str, Any]:
+        try:
+            return {"ok": True, **generate_live_totp(req.secret)}
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return app

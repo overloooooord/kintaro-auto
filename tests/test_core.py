@@ -540,3 +540,219 @@ async def test_ten_account_bans_not_collapsed_and_studio_off_by_default(monkeypa
     assert summary.notice_appeals_verified == 10
     assert summary.post_appeals_verified == 0
     assert submitted_studio == []
+
+
+def test_all_photo_uniquifier_presets_and_mp4_free_atom(tmp_path: Path) -> None:
+    from kintaro_auto.uniquifier import (
+        PHOTO_UNIQUIFIER_PRESETS,
+        uniquify_mp4_free_atom,
+        uniquify_photo_bytes,
+    )
+
+    src = tmp_path / "slide.jpg"
+    Image.new("RGB", (360, 640), (24, 52, 130)).save(src, format="JPEG", quality=92)
+    raw = src.read_bytes()
+
+    hashes = set()
+    for mode in ("minimal_snow", "minimal", "stealth", "medium", "boosted", "ultra_hard"):
+        assert mode in PHOTO_UNIQUIFIER_PRESETS
+        out = uniquify_photo_bytes(raw, mode=mode, rng=random.Random(100))
+        assert len(out) > 1000
+        hashes.add(out[:64])
+    assert len(hashes) >= 5
+
+    # Distinct copies in minimal_snow produce distinct files
+    cfg = AppConfig()
+    cfg.uniquifier.temp_dir = str(tmp_path / "out")
+    cfg.uniquifier.photo_mode = "minimal_snow"
+    m1 = uniquify_photos([src], cfg.uniquifier, rng=random.Random(1))[0]
+    m2 = uniquify_photos([src], cfg.uniquifier, rng=random.Random(2))[0]
+    assert m1.sha256 != m2.sha256
+
+    mp4_a = uniquify_mp4_free_atom(b"\x00\x00\x00\x18ftypmp42", rng=random.Random(1))
+    mp4_b = uniquify_mp4_free_atom(b"\x00\x00\x00\x18ftypmp42", rng=random.Random(2))
+    assert mp4_a != mp4_b and b"free" in mp4_a
+
+
+def test_hashtag_randomizer_sticky_proxy_geo_and_live_totp() -> None:
+    from kintaro_auto.captions import randomize_hashtags
+    from kintaro_auto.models import (
+        DEVICE_GEO_PROFILES,
+        allocate_sticky_proxy,
+        apply_device_geo_profile,
+    )
+    from kintaro_auto.spy import generate_live_totp
+
+    used: set[str] = set()
+    tags = "#piratetoken #piratetokenshop #blackknight #pirateshop #fyp"
+    perms = {randomize_hashtags(tags, used_captions=used, rng=random.Random(i)) for i in range(6)}
+    assert len(perms) == 6
+
+    desc, _ = prepare_description_and_mentions("{A|B} {RAND4} #a #b #c", rng=random.Random(7), shuffle_tags=True)
+    assert "{RAND4}" not in desc
+
+    assert len(DEVICE_GEO_PROFILES) >= 21
+    dev = apply_device_geo_profile({"cookies": {"sessionid": "x"}}, "IT", app_locale="it_IT")
+    assert dev["carrier"] == "TIM" and dev["locale"] == "it_IT" and dev["language"] == "it"
+
+    raw_px = "socks5://bpuser-demo:sec_country-VN@residential-x.bpproxy.at:1002"
+    pinned_same = allocate_sticky_proxy(raw_px, target_country="", lifetime="60m")
+    assert "_country-VN_session-" in pinned_same and "_lifetime-60m" in pinned_same
+    pinned_us = allocate_sticky_proxy(raw_px, target_country="US", lifetime="60m", preserve_existing_session=False)
+    assert "_country-US_session-" in pinned_us
+
+    totp = generate_live_totp("JBSWY3DPEHPK3PXP", timestamp=1700000000)
+    assert len(totp["code"]) == 6 and totp["code"].isdigit() and 1 <= totp["remaining_sec"] <= 30
+
+
+@pytest.mark.asyncio
+async def test_cold_restart_clean_posts_and_anti_shadow_campaign(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kintaro_auto.models import CampaignConfig
+
+    slide1 = tmp_path / "s1.jpg"
+    slide2 = tmp_path / "s2.jpg"
+    Image.new("RGB", (320, 560), (20, 40, 120)).save(slide1, format="JPEG")
+    Image.new("RGB", (320, 560), (200, 160, 20)).save(slide2, format="JPEG")
+
+    calls: list[str] = []
+    deleted_ids: list[str] = []
+    created_posts: list[str] = []
+
+    def kt_handler(req: httpx.Request) -> httpx.Response:
+        p = req.url.path
+        calls.append(p)
+        if p == "/v1/account/posts":
+            if not deleted_ids and not created_posts:
+                return httpx.Response(200, json={"aweme_list": [{"aweme_id": "111000"}]})
+            return httpx.Response(
+                200,
+                json={"aweme_list": [{"aweme_id": aid, "statistics": {"play_count": 42}} for aid in created_posts]},
+            )
+        if p == "/v1/post/delete":
+            body = json.loads(req.content.decode())
+            deleted_ids.append(body["aweme_id"])
+            return httpx.Response(200, json={"status_code": 0})
+        if p == "/v1/music/search":
+            return httpx.Response(
+                200,
+                json={"music": [{"id_str": f"700000{i}", "title": f"Fortnite Track {i}", "author": "FN", "duration": 30} for i in range(6)]},
+            )
+        if p == "/v1/post/create/photo":
+            aid = f"771224000{len(created_posts) + 1}"
+            created_posts.append(aid)
+            return httpx.Response(200, json={"aweme": {"aweme_id": aid, "region": "US"}})
+        if p in ("/v1/device/new_session", "/v1/device/update_hosts", "/v1/device/report", "/v1/account/token_beat", "/v1/account/self"):
+            return httpx.Response(200, json={"status_code": 0})
+        return httpx.Response(200, json={})
+
+    # Patch appeals to fast clean response
+    def appeal_handler(req: httpx.Request) -> httpx.Response:
+        p = req.url.path
+        if p == "/tiktokstudio/api/web/user":
+            return httpx.Response(200, json={"userId": "7071", "userBaseInfo": {"UserProfile": {"UserBase": {"UniqId": "camp_u1"}}}})
+        if p == "/aweme/v1/notice/multi/":
+            return httpx.Response(200, json={"notice_lists": [{"group": 47, "notice_list": []}]})
+        return httpx.Response(200, json={})
+
+    orig_async_client = httpx.AsyncClient
+
+    def patched_appeal_client(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
+        if "transport" not in kwargs:
+            kwargs.pop("proxy", None)
+            kwargs["transport"] = httpx.MockTransport(appeal_handler)
+        return orig_async_client(*args, **kwargs)
+
+    monkeypatch.setattr("kintaro_auto.appeals.httpx.AsyncClient", patched_appeal_client)
+
+    cfg = AppConfig(state_dir=str(tmp_path / "state"))
+    cfg.api.api_key = "demo-key"
+    cfg.api.save_raw_responses = False
+    cfg.uniquifier.temp_dir = str(tmp_path / "tmp_media")
+    store = StateStore(cfg.state_dir)
+    acc = AccountRecord(
+        account_id="camp_u1",
+        username="camp_u1",
+        proxy="socks5://u:p@127.0.0.1:1080",
+        region="US",
+        authenticated=True,
+        device={
+            "cookies": {"sessionid": "s1", "store-idc": "alisg"},
+            "session_ids": {"session": "old-sess-1111"},
+            "counters": {"sessions": 1},
+        },
+    )
+    store.save_account(acc)
+
+    async def _fast_sleep(_sec: float) -> None:
+        return None
+
+    async with KintaroClient(cfg, transport=httpx.MockTransport(kt_handler)) as client:
+        pipeline = AutomationPipeline(cfg, store, client, sleep_fn=_fast_sleep, rng=random.Random(42))
+        camp = CampaignConfig(
+            account_ids=["camp_u1"],
+            media_type="photo",
+            media_paths=[str(slide1), str(slide2)],
+            description="#piratetoken #piratetokenshop #blackknight #pirateshop #fyp",
+            copies_count=6,
+            threads=5,
+            restart_every_n=3,
+            delay_min_sec=0.0,
+            delay_max_sec=0.0,
+            photo_mode="minimal_snow",
+            auto_music_query="Fortnite",
+            delete_old_posts=True,
+            auto_appeal_2048=True,
+            appeal_post_wait_sec=0.0,
+            appeal_quiet_window_sec=0.0,
+            sort_to_folders=True,
+        )
+        results = await pipeline.run_anti_shadow_campaign(camp)
+
+    assert len(results) == 1
+    r0 = results[0]
+    assert r0.status == "completed"
+    assert r0.posts_published == 6
+    assert r0.deleted_old_posts == 1
+    assert deleted_ids == ["111000"]
+    assert r0.folder_key == "clean"
+    assert r0.initial_views == 6 * 42
+    # Cold TikTok restart ran after post #3
+    assert "/v1/device/report" in calls
+    assert "/v1/account/token_beat" in calls
+    reloaded = store.load_account("camp_u1")
+    assert isinstance(reloaded.device, dict)
+    assert reloaded.device["counters"]["sessions"] == 2
+    assert reloaded.device["session_ids"]["session"] != "old-sess-1111"
+    assert (tmp_path / "state" / "sorted_accounts" / "clean" / "clean_accounts.txt").exists()
+
+
+def test_web_v4_presets_uniquifier_preview_and_totp(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+    from kintaro_auto.web import create_web_app
+
+    cfg_path = tmp_path / "config.toml"
+    cfg_path.write_text(f'state_dir = "{tmp_path / "state"}"\n', encoding="utf-8")
+    app = create_web_app(cfg_path)
+    tc = TestClient(app)
+
+    r_pre = tc.get("/api/presets")
+    assert r_pre.status_code == 200
+    body_pre = r_pre.json()
+    assert "minimal_snow" in body_pre["photo_presets"]
+    assert any(p["id"] == "us_6posts_minimal_snow" for p in body_pre["campaign_presets"])
+
+    img_buf = tmp_path / "t.jpg"
+    Image.new("RGB", (240, 420), (30, 80, 180)).save(img_buf, format="JPEG")
+    r_prev = tc.post(
+        "/api/uniquifier/preview",
+        data={"photo_mode": "minimal_snow"},
+        files={"file": ("t.jpg", img_buf.read_bytes(), "image/jpeg")},
+    )
+    assert r_prev.status_code == 200
+    assert r_prev.json()["after_data_url"].startswith("data:image/jpeg;base64,")
+
+    r_totp = tc.post("/api/totp/generate", json={"secret": "JBSWY3DPEHPK3PXP"})
+    assert r_totp.status_code == 200
+    assert len(r_totp.json()["code"]) == 6

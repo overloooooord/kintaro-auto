@@ -16,6 +16,9 @@ const UNBAN_PICK = new Set();
 const AP_MEDIA_PICK = new Set();
 const UP_LIB_PICK = new Set();
 let MEDIA_LIBRARY = [];
+let AP_PRESETS = [];
+let AP_ACTIVE_PRESET = '';
+let AP_CONFIG_LOADED = false;
 let UP_FILES = [];
 let LAST_SHADOW_ROWS = [];
 let previewTimer = null;
@@ -143,7 +146,7 @@ function switchView(name) {
   document.getElementById('heroTitle').textContent = meta.title;
   document.getElementById('heroSub').textContent = meta.sub;
 
-  if (name === 'autopilot') { loadMediaLibrary(); renderAutopilotView(); }
+  if (name === 'autopilot') { loadMediaLibrary(); loadAutopilotConfig(false); renderAutopilotView(); }
   if (name === 'upload') { loadMediaLibrary(); renderUploadPicker(); }
   if (name === 'unban') renderUnbanView();
   if (name === 'tools') { loadConfig(); loadLastShadow(); }
@@ -183,6 +186,7 @@ function jumpFilter(f) {
 
 async function syncNow() {
   await Promise.all([fetchState(), loadMediaLibrary()]);
+  await loadAutopilotConfig(true);
   toast('Состояние синхронизировано', 'success');
 }
 
@@ -455,6 +459,18 @@ async function uploadToMediaLibrary(fileList) {
   } catch (e) { toast(e.message, 'err'); }
 }
 
+async function deleteMediaLibraryItem(ev, name) {
+  ev.stopPropagation();
+  if (!confirm(`Удалить креатив ${name} из библиотеки?`)) return;
+  try {
+    await apiJson(`/api/media/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    AP_MEDIA_PICK.delete(name);
+    UP_LIB_PICK.delete(name);
+    toast(`Удалён ${name}`, 'info');
+    await loadMediaLibrary();
+  } catch (e) { toast(e.message, 'err'); }
+}
+
 function toggleApMedia(name) {
   if (AP_MEDIA_PICK.has(name)) AP_MEDIA_PICK.delete(name); else AP_MEDIA_PICK.add(name);
   renderMediaPickers();
@@ -476,6 +492,7 @@ function renderMediaPickers() {
           return `<div class="thumb ${picked ? 'picked' : ''}" onclick="toggleApMedia('${esc(f.name)}')" title="${esc(f.name)}">
             ${f.is_video ? `<video src="${url}" muted></video>` : `<img src="${url}" alt="" />`}
             <div class="thumb-check">${picked ? '✓' : ''}</div>
+            <button class="thumb-rm" onclick="deleteMediaLibraryItem(event, '${esc(f.name)}')" title="Удалить">✕</button>
             <div class="thumb-name">${esc(f.name)}</div>
           </div>`;
         }).join('')
@@ -500,7 +517,154 @@ function renderMediaPickers() {
   }
 }
 
-// ── Goal Autopilot 600 View ──────────────────────────────────
+// ── Goal Autopilot 600 Settings, Presets & Monitor ───────────
+function switchApTab(tab, btn) {
+  ['main', 'pacing', 'appeals'].forEach(k => {
+    document.getElementById('ap-tab-' + k).classList.toggle('hidden', k !== tab);
+  });
+  document.querySelectorAll('[data-ap-tab]').forEach(p => p.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+}
+
+function renderApPresets() {
+  const box = document.getElementById('apPresetStrip');
+  if (!box) return;
+  box.innerHTML = (AP_PRESETS || []).map(p =>
+    `<button class="preset-chip ${AP_ACTIVE_PRESET === p.id ? 'active' : ''}" onclick="applyAutopilotPreset('${esc(p.id)}')" title="${esc(p.desc || '')}">${esc(p.name)}</button>`
+  ).join('');
+}
+
+function populateAutopilotForm(cfg) {
+  if (!cfg) return;
+  const setVal = (id, v) => { const el = document.getElementById(id); if (el && v !== undefined && v !== null) el.value = v; };
+  const setChk = (id, v) => { const el = document.getElementById(id); if (el && v !== undefined && v !== null) el.checked = !!v; };
+
+  setVal('apTargetViews', cfg.target_views ?? 600);
+  setVal('apTargetMode', cfg.target_mode || 'total');
+  setVal('apScope', cfg.scope || 'clean_empty');
+  setVal('apMaxAccs', cfg.max_accounts ?? 0);
+  setVal('apDesc', cfg.description ?? '');
+  setVal('apMusic', cfg.auto_music_query ?? 'Fortnite');
+  setVal('apPhotoMode', cfg.photo_mode || 'anti_unoriginal');
+  setVal('apThreads', cfg.threads ?? 3);
+  setVal('apCopies', cfg.copies_per_round ?? 6);
+  setVal('apMaxRounds', cfg.max_rounds ?? 3);
+
+  setVal('apDelayMin', cfg.delay_min_sec ?? 14);
+  setVal('apDelayMax', cfg.delay_max_sec ?? 20);
+  setVal('apRestartN', cfg.restart_every_n ?? 3);
+  setVal('apMonSec', cfg.monitor_interval_sec ?? 90);
+  setVal('apWaitMin', cfg.reupload_wait_minutes ?? 25);
+  setVal('apMaxPatience', cfg.max_patience_minutes ?? 55);
+  setVal('apGrowthViews', cfg.growth_extend_views ?? 35);
+  setVal('apProtectViews', cfg.protect_views_threshold ?? 150);
+  setVal('apTopup', cfg.topup_copies ?? 3);
+  setVal('apRegion', cfg.region || 'US');
+  setVal('apLocale', cfg.app_locale || 'en_US');
+  setChk('apRandTags', cfg.randomize_tags ?? true);
+  setChk('apRefill', cfg.auto_refill_pool ?? true);
+  setChk('apDelFirst', cfg.delete_old_on_first_round ?? false);
+
+  setVal('apAppealThreads', cfg.appeal_threads ?? 3);
+  setVal('apQuietSec', cfg.appeal_quiet_seconds ?? 45);
+  setVal('apAppealMaxWait', cfg.appeal_max_wait_seconds ?? 180);
+  setVal('apAppealText', cfg.appeal_text || 'Our content is original, authentic, and strictly follows all TikTok Community Guidelines.');
+  setVal('apOverrideProxy', cfg.override_proxy_country || '');
+  setChk('apAuto2048', cfg.auto_appeal_2048 ?? true);
+  setChk('apAutoStudio', cfg.auto_appeal_studio ?? true);
+  setChk('apHideRejected', cfg.hide_rejected ?? true);
+  setChk('apStickyProxy', cfg.pin_sticky_proxy ?? true);
+
+  if (Array.isArray(cfg.media_files) && cfg.media_files.length) {
+    const validNames = new Set(MEDIA_LIBRARY.map(f => f.name));
+    const matched = cfg.media_files.filter(m => !validNames.size || validNames.has(m));
+    if (matched.length) {
+      AP_MEDIA_PICK.clear();
+      matched.forEach(m => AP_MEDIA_PICK.add(m));
+      renderMediaPickers();
+    }
+  }
+}
+
+async function loadAutopilotConfig(force = false) {
+  if (AP_CONFIG_LOADED && !force) return;
+  try {
+    const r = await apiJson('/api/autopilot/goal/config');
+    AP_PRESETS = r.presets || [];
+    renderApPresets();
+    if (r.config) populateAutopilotForm(r.config);
+    AP_CONFIG_LOADED = true;
+  } catch (_) {}
+}
+
+function applyAutopilotPreset(presetId) {
+  const p = (AP_PRESETS || []).find(x => x.id === presetId);
+  if (!p) return;
+  AP_ACTIVE_PRESET = p.id;
+  populateAutopilotForm(p.values || {});
+  renderApPresets();
+  toast(`Применён пресет: ${p.name}`, 'info');
+}
+
+function collectAutopilotFormPayload() {
+  const scope = document.getElementById('apScope').value;
+  const account_ids = scope === 'selected' ? Array.from(SELECTED) : [];
+  const media_files = MEDIA_LIBRARY.map(f => f.name).filter(name => AP_MEDIA_PICK.has(name));
+  return {
+    target_views: Number(document.getElementById('apTargetViews').value || 600),
+    target_mode: document.getElementById('apTargetMode').value,
+    scope: scope === 'selected' ? 'selected' : scope,
+    account_ids,
+    max_accounts: Number(document.getElementById('apMaxAccs').value || 0),
+    media_files,
+    description: document.getElementById('apDesc').value,
+    auto_music_query: document.getElementById('apMusic').value,
+    photo_mode: document.getElementById('apPhotoMode').value,
+    threads: Number(document.getElementById('apThreads').value || 3),
+    copies_per_round: Number(document.getElementById('apCopies').value || 6),
+    max_rounds: Number(document.getElementById('apMaxRounds').value || 3),
+    delay_min_sec: Number(document.getElementById('apDelayMin').value || 14),
+    delay_max_sec: Number(document.getElementById('apDelayMax').value || 20),
+    restart_every_n: Number(document.getElementById('apRestartN').value || 3),
+    monitor_interval_sec: Number(document.getElementById('apMonSec').value || 90),
+    reupload_wait_minutes: Number(document.getElementById('apWaitMin').value || 25),
+    max_patience_minutes: Number(document.getElementById('apMaxPatience').value || 55),
+    growth_extend_views: Number(document.getElementById('apGrowthViews').value || 35),
+    protect_views_threshold: Number(document.getElementById('apProtectViews').value || 150),
+    topup_copies: Number(document.getElementById('apTopup').value || 3),
+    region: document.getElementById('apRegion').value || 'US',
+    app_locale: document.getElementById('apLocale').value || 'en_US',
+    randomize_tags: document.getElementById('apRandTags').checked,
+    auto_refill_pool: document.getElementById('apRefill').checked,
+    delete_old_on_first_round: document.getElementById('apDelFirst').checked,
+    appeal_threads: Number(document.getElementById('apAppealThreads').value || 3),
+    appeal_quiet_seconds: Number(document.getElementById('apQuietSec').value || 45),
+    appeal_max_wait_seconds: Number(document.getElementById('apAppealMaxWait').value || 180),
+    appeal_text: document.getElementById('apAppealText').value,
+    override_proxy_country: document.getElementById('apOverrideProxy').value.trim(),
+    auto_appeal_2048: document.getElementById('apAuto2048').checked,
+    auto_appeal_studio: document.getElementById('apAutoStudio').checked,
+    hide_rejected: document.getElementById('apHideRejected').checked,
+    pin_sticky_proxy: document.getElementById('apStickyProxy').checked,
+  };
+}
+
+async function saveGoalAutopilotConfig() {
+  const btn = document.getElementById('btnApSave');
+  btn.disabled = true;
+  try {
+    const payload = collectAutopilotFormPayload();
+    const r = await apiPost('/api/autopilot/goal/config', payload);
+    if (r.config) populateAutopilotForm(r.config);
+    toast(r.running ? 'Настройки сохранены и применены на лету' : 'Настройки Автопилота сохранены', 'success');
+    await fetchState();
+  } catch (e) {
+    toast(e.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 function phaseBadge(phase) {
   switch (phase) {
     case 'goal_reached': return '<span class="badge b-ok">🎯 Цель 600+</span>';
@@ -591,40 +755,19 @@ function renderAutopilotView() {
 }
 
 async function startGoalAutopilot() {
-  const scope = document.getElementById('apScope').value;
-  const account_ids = scope === 'selected' ? Array.from(SELECTED) : [];
-  if (scope === 'selected' && !account_ids.length) {
+  const payload = collectAutopilotFormPayload();
+  if (payload.scope === 'selected' && !payload.account_ids.length) {
     return toast('Сначала выберите аккаунты галочками на вкладке «Аккаунты»', 'warn');
   }
-  const media_files = MEDIA_LIBRARY.map(f => f.name).filter(name => AP_MEDIA_PICK.has(name));
-  if (!media_files.length) {
+  if (!payload.media_files.length) {
     return toast('Выберите хотя бы один креатив из библиотеки', 'warn');
   }
   const btn = document.getElementById('btnApStart');
   btn.disabled = true;
   try {
     await apiPost('/api/autopilot/goal/start', {
-      target_views: Number(document.getElementById('apTargetViews').value || 600),
-      target_mode: document.getElementById('apTargetMode').value,
-      scope: scope === 'selected' ? 'all_authed' : scope,
-      account_ids,
-      max_accounts: Number(document.getElementById('apMaxAccs').value || 0),
-      media_files,
-      description: document.getElementById('apDesc').value,
-      auto_music_query: document.getElementById('apMusic').value,
-      photo_mode: document.getElementById('apPhotoMode').value,
-      threads: Number(document.getElementById('apThreads').value || 3),
-      copies_per_round: Number(document.getElementById('apCopies').value || 6),
-      max_rounds: Number(document.getElementById('apMaxRounds').value || 3),
-      reupload_wait_minutes: Number(document.getElementById('apWaitMin').value || 25),
-      monitor_interval_sec: Number(document.getElementById('apMonSec').value || 90),
-      topup_copies: Number(document.getElementById('apTopup').value || 3),
-      protect_views_threshold: Number(document.getElementById('apProtectViews').value || 150),
-      region: document.getElementById('apRegion').value || 'US',
-      auto_appeal_2048: document.getElementById('apAuto2048').checked,
-      auto_appeal_studio: document.getElementById('apAutoStudio').checked,
-      auto_refill_pool: document.getElementById('apRefill').checked,
-      delete_old_on_first_round: document.getElementById('apDelFirst').checked,
+      ...payload,
+      scope: payload.scope === 'selected' ? 'all_authed' : payload.scope,
     });
     toast('Автопилот запущен!', 'success');
     await fetchState();
@@ -1313,6 +1456,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(
   document.getElementById('connAddr').textContent = window.location.host || '127.0.0.1:8080';
   bindDrop('mediaDropzone', files => handleMediaFiles(files));
   await Promise.all([fetchState(), loadMediaLibrary()]);
+  await loadAutopilotConfig(true);
   (STATE.logs || []).slice(-60).forEach(appendLog);
 
   const es = new EventSource('/api/events');

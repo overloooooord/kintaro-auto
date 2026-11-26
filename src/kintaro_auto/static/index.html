@@ -358,134 +358,214 @@
           </div>
 
           <div class="grid-auto">
-            <!-- LEFT: AUTOPILOT CONTROLS -->
+            <!-- LEFT: AUTOPILOT CONTROLS & FULL SETTINGS -->
             <div class="card">
               <div class="card-title">
-                <span>Настройки Автопилота</span>
+                <span>Настройка Автопилота</span>
                 <span class="badge b-dim mono" id="apStatusBadge">Ожидание</span>
               </div>
 
-              <div class="row-2">
-                <div class="field">
-                  <label>Цель просмотров</label>
-                  <input type="number" id="apTargetViews" value="600" min="50" max="500000" step="50" />
-                </div>
-                <div class="field">
-                  <label>Условие цели</label>
-                  <select id="apTargetMode">
-                    <option value="total" selected>Сумма по аккаунту ≥ цели</option>
-                    <option value="max_post">Хотя бы 1 пост ≥ цели</option>
-                  </select>
-                </div>
+              <!-- 1-Click Strategy Presets -->
+              <div class="preset-strip" id="apPresetStrip"></div>
+
+              <!-- Clean 3-Section Settings Tabs -->
+              <div class="pills full" style="margin-bottom:14px;">
+                <button class="pill active" data-ap-tab="main" onclick="switchApTab('main', this)">Основное</button>
+                <button class="pill" data-ap-tab="pacing" onclick="switchApTab('pacing', this)">Темп и цели</button>
+                <button class="pill" data-ap-tab="appeals" onclick="switchApTab('appeals', this)">Апелляции</button>
               </div>
 
-              <div class="row-2">
-                <div class="field">
-                  <label>Пул аккаунтов</label>
-                  <select id="apScope">
-                    <option value="clean_empty" selected>Чистые пустые (0 постов)</option>
-                    <option value="clean">Все чистые</option>
-                    <option value="all_authed">Все авторизованные</option>
-                    <option value="selected">Выбранные галочками</option>
-                  </select>
-                </div>
-                <div class="field">
-                  <label>Лимит аккаунтов (0 = все)</label>
-                  <input type="number" id="apMaxAccs" value="0" min="0" max="500" />
-                </div>
-              </div>
-
-              <div class="field">
-                <label style="display:flex;justify-content:space-between;align-items:center;">
-                  <span>Креативы из библиотеки (<span class="mono" id="apMediaCnt">0</span>)</span>
-                  <button class="btn btn-xs" onclick="document.getElementById('apMediaUploadIn').click()">+ Загрузить</button>
-                </label>
-                <input id="apMediaUploadIn" type="file" multiple accept="image/*,video/mp4" class="hidden" onchange="uploadToMediaLibrary(this.files)" />
-                <div class="thumbs" id="apMediaGrid"></div>
-              </div>
-
-              <div class="field">
-                <label>Теги / описание (рандомизируются на каждом посте)</label>
-                <textarea id="apDesc" style="min-height:54px;">#piratetoken #piratetokenshop #blackknight #pirateshop #fyp</textarea>
-              </div>
-
-              <div class="row-2">
-                <div class="field">
-                  <label>Музыка</label>
-                  <input type="text" id="apMusic" value="Fortnite" />
-                </div>
-                <div class="field">
-                  <label>Уникализатор</label>
-                  <select id="apPhotoMode">
-                    <option value="anti_unoriginal" selected>anti_unoriginal (макс. защита)</option>
-                    <option value="minimal_snow">minimal_snow (классика)</option>
-                    <option value="boosted">boosted (усиленный)</option>
-                    <option value="stealth">stealth (лёгкий)</option>
-                  </select>
-                </div>
-              </div>
-
-              <div class="row-3">
-                <div class="field">
-                  <label>Потоки залива</label>
-                  <input type="number" id="apThreads" value="3" min="1" max="10" />
-                </div>
-                <div class="field">
-                  <label>Постов/раунд</label>
-                  <input type="number" id="apCopies" value="6" min="1" max="12" />
-                </div>
-                <div class="field">
-                  <label>Макс. раундов</label>
-                  <input type="number" id="apMaxRounds" value="3" min="1" max="6" />
-                </div>
-              </div>
-
-              <details class="adv">
-                <summary>Умный мониторинг, долив и авто-апелляции</summary>
-                <div class="adv-body">
-                  <div class="row-3" style="margin-top:8px;">
-                    <div class="field">
-                      <label>Ждать (мин)</label>
-                      <input type="number" id="apWaitMin" value="25" min="2" max="180" />
-                    </div>
-                    <div class="field">
-                      <label>Опрос (сек)</label>
-                      <input type="number" id="apMonSec" value="90" min="15" max="600" />
-                    </div>
-                    <div class="field">
-                      <label>Долив (+шт)</label>
-                      <input type="number" id="apTopup" value="3" min="1" max="6" />
-                    </div>
+              <!-- TAB 1: MAIN -->
+              <div id="ap-tab-main">
+                <div class="row-2">
+                  <div class="field">
+                    <label>Цель просмотров</label>
+                    <input type="number" id="apTargetViews" value="600" min="50" max="500000" step="50" />
                   </div>
-                  <div class="row-2">
-                    <div class="field">
-                      <label>Порог сохранения живых постов</label>
-                      <input type="number" id="apProtectViews" value="150" min="0" max="5000" />
-                    </div>
-                    <div class="field">
-                      <label>Регион</label>
-                      <input type="text" id="apRegion" value="US" />
-                    </div>
-                  </div>
-                  <div style="display:flex;flex-direction:column;gap:7px;margin-top:4px;">
-                    <label class="chk-row"><input type="checkbox" class="chk" id="apAuto2048" checked /> Авто-апелляция 2048 (до, между и после постов)</label>
-                    <label class="chk-row"><input type="checkbox" class="chk" id="apAutoStudio" checked /> Авто-апелляция Studio UNORIGINAL_NR при мониторинге</label>
-                    <label class="chk-row"><input type="checkbox" class="chk" id="apRefill" checked /> Подхватывать новые чистые аккаунты автоматически</label>
-                    <label class="chk-row"><input type="checkbox" class="chk" id="apDelFirst" /> Удалить старые посты перед 1-м раундом</label>
+                  <div class="field">
+                    <label>Условие цели</label>
+                    <select id="apTargetMode">
+                      <option value="total" selected>Сумма по аккаунту ≥ цели</option>
+                      <option value="max_post">Хотя бы 1 пост ≥ цели</option>
+                    </select>
                   </div>
                 </div>
-              </details>
 
-              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
-                <button class="btn btn-primary" style="flex:1;" id="btnApStart" onclick="startGoalAutopilot()">▶ Запустить автопилот</button>
+                <div class="row-2">
+                  <div class="field">
+                    <label>Пул аккаунтов</label>
+                    <select id="apScope">
+                      <option value="clean_empty" selected>Чистые пустые (0 постов)</option>
+                      <option value="clean">Все чистые</option>
+                      <option value="all_authed">Все авторизованные</option>
+                      <option value="selected">Выбранные галочками</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label>Лимит аккаунтов (0 = все)</label>
+                    <input type="number" id="apMaxAccs" value="0" min="0" max="500" />
+                  </div>
+                </div>
+
+                <div class="field">
+                  <label style="display:flex;justify-content:space-between;align-items:center;">
+                    <span>Креативы из библиотеки (<span class="mono" id="apMediaCnt">0</span>)</span>
+                    <button class="btn btn-xs" onclick="document.getElementById('apMediaUploadIn').click()">+ Загрузить</button>
+                  </label>
+                  <input id="apMediaUploadIn" type="file" multiple accept="image/*,video/mp4" class="hidden" onchange="uploadToMediaLibrary(this.files)" />
+                  <div class="thumbs" id="apMediaGrid"></div>
+                </div>
+
+                <div class="field">
+                  <label>Теги / описание (spintax {a|b})</label>
+                  <textarea id="apDesc" style="min-height:54px;">#piratetoken #piratetokenshop #blackknight #pirateshop #fyp</textarea>
+                </div>
+
+                <div class="row-2">
+                  <div class="field">
+                    <label>Музыка</label>
+                    <input type="text" id="apMusic" value="Fortnite" />
+                  </div>
+                  <div class="field">
+                    <label>Уникализатор</label>
+                    <select id="apPhotoMode">
+                      <option value="anti_unoriginal" selected>anti_unoriginal (макс. защита)</option>
+                      <option value="minimal_snow">minimal_snow (классика)</option>
+                      <option value="boosted">boosted (усиленный)</option>
+                      <option value="stealth">stealth (лёгкий)</option>
+                      <option value="clean_crop">clean_crop (чистый кроп)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="row-3">
+                  <div class="field">
+                    <label>Потоки залива</label>
+                    <input type="number" id="apThreads" value="3" min="1" max="10" />
+                  </div>
+                  <div class="field">
+                    <label>Постов/раунд</label>
+                    <input type="number" id="apCopies" value="6" min="1" max="12" />
+                  </div>
+                  <div class="field">
+                    <label>Макс. раундов</label>
+                    <input type="number" id="apMaxRounds" value="3" min="1" max="6" />
+                  </div>
+                </div>
+              </div>
+
+              <!-- TAB 2: PACING & MONITORING -->
+              <div id="ap-tab-pacing" class="hidden">
+                <div class="row-3">
+                  <div class="field">
+                    <label>Пауза от (сек)</label>
+                    <input type="number" id="apDelayMin" value="14" min="0" max="120" />
+                  </div>
+                  <div class="field">
+                    <label>Пауза до (сек)</label>
+                    <input type="number" id="apDelayMax" value="20" min="0" max="180" />
+                  </div>
+                  <div class="field">
+                    <label>Рестарт каждые</label>
+                    <input type="number" id="apRestartN" value="3" min="0" max="12" />
+                  </div>
+                </div>
+
+                <div class="row-3">
+                  <div class="field">
+                    <label>Опрос (сек)</label>
+                    <input type="number" id="apMonSec" value="90" min="15" max="600" />
+                  </div>
+                  <div class="field">
+                    <label>Ждать (мин)</label>
+                    <input type="number" id="apWaitMin" value="25" min="2" max="180" />
+                  </div>
+                  <div class="field">
+                    <label>Макс. терпение</label>
+                    <input type="number" id="apMaxPatience" value="55" min="5" max="240" />
+                  </div>
+                </div>
+
+                <div class="row-3">
+                  <div class="field">
+                    <label>Рост (+/10м)</label>
+                    <input type="number" id="apGrowthViews" value="35" min="5" max="5000" />
+                  </div>
+                  <div class="field">
+                    <label>Сохранить от</label>
+                    <input type="number" id="apProtectViews" value="150" min="0" max="50000" />
+                  </div>
+                  <div class="field">
+                    <label>Долив (+шт)</label>
+                    <input type="number" id="apTopup" value="3" min="1" max="6" />
+                  </div>
+                </div>
+
+                <div class="row-2">
+                  <div class="field">
+                    <label>Регион залива</label>
+                    <input type="text" id="apRegion" value="US" />
+                  </div>
+                  <div class="field">
+                    <label>Локаль устройства</label>
+                    <input type="text" id="apLocale" value="en_US" />
+                  </div>
+                </div>
+
+                <div style="display:flex;flex-direction:column;gap:8px;margin-top:4px;">
+                  <label class="chk-row"><input type="checkbox" class="chk" id="apRandTags" checked /> Перемешивать порядок тегов на каждом посте</label>
+                  <label class="chk-row"><input type="checkbox" class="chk" id="apRefill" checked /> Автоматически подхватывать свежие чистые аккаунты</label>
+                  <label class="chk-row"><input type="checkbox" class="chk" id="apDelFirst" /> Удалить старые посты перед 1-м раундом</label>
+                </div>
+              </div>
+
+              <!-- TAB 3: APPEALS & PROXY -->
+              <div id="ap-tab-appeals" class="hidden">
+                <div class="row-3">
+                  <div class="field">
+                    <label>Потоки 2048</label>
+                    <input type="number" id="apAppealThreads" value="3" min="1" max="10" />
+                  </div>
+                  <div class="field">
+                    <label>Тишина (сек)</label>
+                    <input type="number" id="apQuietSec" value="45" min="0" max="240" />
+                  </div>
+                  <div class="field">
+                    <label>Макс. дожим (с)</label>
+                    <input type="number" id="apAppealMaxWait" value="180" min="15" max="600" />
+                  </div>
+                </div>
+
+                <div class="field">
+                  <label>Текст апелляции (spintax {a|b})</label>
+                  <textarea id="apAppealText" style="min-height:62px;">Our content is original, authentic, and strictly follows all TikTok Community Guidelines.</textarea>
+                </div>
+
+                <div class="field">
+                  <label>Принудительный GEO прокси (пусто = не менять прокси!)</label>
+                  <input type="text" id="apOverrideProxy" placeholder="оставьте пустым чтобы сохранить GEO аккаунта" />
+                </div>
+
+                <div style="display:flex;flex-direction:column;gap:8px;margin-top:4px;">
+                  <label class="chk-row"><input type="checkbox" class="chk" id="apAuto2048" checked /> Авто-апелляция 2048 (до, между и после постов)</label>
+                  <label class="chk-row"><input type="checkbox" class="chk" id="apAutoStudio" checked /> Авто-апелляция Studio UNORIGINAL_NR при мониторинге</label>
+                  <label class="chk-row"><input type="checkbox" class="chk" id="apHideRejected" checked /> Скрывать отклонённые посты (FAILED) в Private</label>
+                  <label class="chk-row"><input type="checkbox" class="chk" id="apStickyProxy" checked /> Закрепить sticky-прокси на время раунда</label>
+                </div>
+              </div>
+
+              <!-- ALWAYS-VISIBLE ACTION BAR -->
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;padding-top:12px;border-top:1px solid var(--border);">
+                <button class="btn" id="btnApSave" onclick="saveGoalAutopilotConfig()" title="Сохранить настройки на диск (и применить на лету)">💾 Сохранить</button>
+                <button class="btn btn-primary" style="flex:1;" id="btnApStart" onclick="startGoalAutopilot()">▶ Запустить</button>
                 <button class="btn btn-err" id="btnApStop" onclick="stopGoalAutopilot()">⏹ Стоп</button>
-                <button class="btn btn-ghost" onclick="clearGoalAutopilot()" title="Очистить завершённые">🗑</button>
+                <button class="btn btn-ghost" onclick="clearGoalAutopilot()" title="Очистить историю прогона">🗑</button>
               </div>
 
-              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
-                <button class="btn btn-sm btn-ok" onclick="copyAutopilot('reached', 'lines')">📋 Копировать 600+ (строки)</button>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;">
+                <button class="btn btn-sm btn-ok" onclick="copyAutopilot('reached', 'lines')">📋 Копировать 600+</button>
                 <button class="btn btn-sm" onclick="copyAutopilot('reached', 'summary')">📊 Сводка 600+</button>
-                <button class="btn btn-sm" onclick="copyAutopilot('all', 'urls')">🔗 Ссылки постов</button>
+                <button class="btn btn-sm" onclick="copyAutopilot('all', 'urls')">🔗 Ссылки</button>
               </div>
             </div>
 

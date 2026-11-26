@@ -106,6 +106,157 @@ class GoalAutopilotConfig:
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
+    def normalized(self) -> GoalAutopilotConfig:
+        d = self.to_dict()
+        d["target_views"] = max(50, min(500_000, int(d.get("target_views") or 600)))
+        d["target_mode"] = "max_post" if d.get("target_mode") == "max_post" else "total"
+        d["copies_per_round"] = max(1, min(12, int(d.get("copies_per_round") or 6)))
+        d["topup_copies"] = max(1, min(d["copies_per_round"], int(d.get("topup_copies") or 3)))
+        d["protect_views_threshold"] = max(0, min(50_000, int(d.get("protect_views_threshold") or 0)))
+        d["max_rounds"] = max(1, min(6, int(d.get("max_rounds") or 3)))
+        d["threads"] = max(1, min(10, int(d.get("threads") or 3)))
+        d["appeal_threads"] = max(1, min(10, int(d.get("appeal_threads") or 3)))
+        d["monitor_interval_sec"] = max(15, min(600, int(d.get("monitor_interval_sec") or 90)))
+        d["reupload_wait_minutes"] = max(2, min(180, int(d.get("reupload_wait_minutes") or 25)))
+        d["growth_extend_views"] = max(5, min(10_000, int(d.get("growth_extend_views") or 35)))
+        d["max_patience_minutes"] = max(
+            d["reupload_wait_minutes"], min(240, int(d.get("max_patience_minutes") or 55))
+        )
+        d["restart_every_n"] = max(0, min(12, int(d.get("restart_every_n") or 0)))
+        d["delay_min_sec"] = max(0.0, min(120.0, float(d.get("delay_min_sec") or 0.0)))
+        d["delay_max_sec"] = max(d["delay_min_sec"], min(180.0, float(d.get("delay_max_sec") or 0.0)))
+        d["max_accounts"] = max(0, min(500, int(d.get("max_accounts") or 0)))
+        d["appeal_quiet_seconds"] = max(0.0, min(240.0, float(d.get("appeal_quiet_seconds") or 0.0)))
+        d["appeal_max_wait_seconds"] = max(
+            max(15.0, d["appeal_quiet_seconds"]), min(600.0, float(d.get("appeal_max_wait_seconds") or 180.0))
+        )
+        d["region"] = (str(d.get("region") or "US").strip().upper() or "US")[:4]
+        d["app_locale"] = str(d.get("app_locale") or "en_US").strip() or "en_US"
+        d["override_proxy_country"] = str(d.get("override_proxy_country") or "").strip().upper()[:4]
+        if d.get("scope") not in ("clean_empty", "clean", "selected", "all_authed"):
+            d["scope"] = "clean_empty"
+        return GoalAutopilotConfig(**d)
+
+
+AUTOPILOT_PRESETS: list[dict[str, Any]] = [
+    {
+        "id": "standard_600",
+        "name": "🎯 Стандарт 600",
+        "desc": "Сбалансированный залив до 600 просм. · 3 потока · умный долив +3 при ≥150",
+        "values": {
+            "target_views": 600,
+            "target_mode": "total",
+            "photo_mode": "anti_unoriginal",
+            "copies_per_round": 6,
+            "topup_copies": 3,
+            "protect_views_threshold": 150,
+            "max_rounds": 3,
+            "threads": 3,
+            "appeal_threads": 3,
+            "monitor_interval_sec": 90,
+            "reupload_wait_minutes": 25,
+            "growth_extend_views": 35,
+            "max_patience_minutes": 55,
+            "restart_every_n": 3,
+            "delay_min_sec": 14.0,
+            "delay_max_sec": 20.0,
+            "appeal_quiet_seconds": 45.0,
+            "appeal_max_wait_seconds": 180.0,
+            "auto_appeal_2048": True,
+            "auto_appeal_studio": True,
+            "hide_rejected": True,
+            "auto_refill_pool": True,
+        },
+    },
+    {
+        "id": "turbo_600",
+        "name": "⚡ Турбо 600",
+        "desc": "Быстрый пролив в 5 потоков · короткие паузы 10–15с · 4 потока дожима 2048",
+        "values": {
+            "target_views": 600,
+            "target_mode": "total",
+            "photo_mode": "anti_unoriginal",
+            "copies_per_round": 6,
+            "topup_copies": 3,
+            "protect_views_threshold": 140,
+            "max_rounds": 3,
+            "threads": 5,
+            "appeal_threads": 4,
+            "monitor_interval_sec": 75,
+            "reupload_wait_minutes": 20,
+            "growth_extend_views": 40,
+            "max_patience_minutes": 45,
+            "restart_every_n": 3,
+            "delay_min_sec": 10.0,
+            "delay_max_sec": 15.0,
+            "appeal_quiet_seconds": 40.0,
+            "appeal_max_wait_seconds": 150.0,
+            "auto_appeal_2048": True,
+            "auto_appeal_studio": True,
+            "hide_rejected": True,
+            "auto_refill_pool": True,
+        },
+    },
+    {
+        "id": "night_safe_600",
+        "name": "🌙 Ночной мягкий",
+        "desc": "Щадящий ночной темп · 2 потока · паузы 18–26с · терпение до 65 мин",
+        "values": {
+            "target_views": 600,
+            "target_mode": "total",
+            "photo_mode": "anti_unoriginal",
+            "copies_per_round": 6,
+            "topup_copies": 3,
+            "protect_views_threshold": 120,
+            "max_rounds": 3,
+            "threads": 2,
+            "appeal_threads": 3,
+            "monitor_interval_sec": 110,
+            "reupload_wait_minutes": 30,
+            "growth_extend_views": 30,
+            "max_patience_minutes": 65,
+            "restart_every_n": 3,
+            "delay_min_sec": 18.0,
+            "delay_max_sec": 26.0,
+            "appeal_quiet_seconds": 55.0,
+            "appeal_max_wait_seconds": 210.0,
+            "auto_appeal_2048": True,
+            "auto_appeal_studio": True,
+            "hide_rejected": True,
+            "auto_refill_pool": True,
+        },
+    },
+    {
+        "id": "viral_post_1000",
+        "name": "🔥 1 пост ≥ 1000",
+        "desc": "Цель: хотя бы один пост на аккаунте ≥ 1000 просм. · до 4 раундов",
+        "values": {
+            "target_views": 1000,
+            "target_mode": "max_post",
+            "photo_mode": "anti_unoriginal",
+            "copies_per_round": 6,
+            "topup_copies": 4,
+            "protect_views_threshold": 200,
+            "max_rounds": 4,
+            "threads": 3,
+            "appeal_threads": 3,
+            "monitor_interval_sec": 90,
+            "reupload_wait_minutes": 30,
+            "growth_extend_views": 50,
+            "max_patience_minutes": 70,
+            "restart_every_n": 3,
+            "delay_min_sec": 14.0,
+            "delay_max_sec": 20.0,
+            "appeal_quiet_seconds": 45.0,
+            "appeal_max_wait_seconds": 180.0,
+            "auto_appeal_2048": True,
+            "auto_appeal_studio": True,
+            "hide_rejected": True,
+            "auto_refill_pool": True,
+        },
+    },
+]
+
 
 def _now_hms() -> str:
     return datetime.now().strftime("%H:%M:%S")
@@ -183,10 +334,86 @@ class GoalAutopilotManager:
         self._supervisor_task: asyncio.Task[None] | None = None
 
         self._load_persisted_state()
+        self._load_saved_config()
 
     @property
     def _state_file(self) -> Path:
         return Path(self._get_cfg().state_dir) / "autopilot_state.json"
+
+    @property
+    def _config_file(self) -> Path:
+        return Path(self._get_cfg().state_dir) / "autopilot_config.json"
+
+    def _load_saved_config(self) -> None:
+        fp = self._config_file
+        if not fp.is_file():
+            return
+        try:
+            raw = json.loads(fp.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                known = {f for f in GoalAutopilotConfig.__dataclass_fields__}
+                merged = {**self.config.to_dict(), **{k: v for k, v in raw.items() if k in known}}
+                self.config = GoalAutopilotConfig(**merged).normalized()
+        except Exception:
+            pass
+
+    def save_config(self, updates: dict[str, Any] | GoalAutopilotConfig) -> dict[str, Any]:
+        known = {f for f in GoalAutopilotConfig.__dataclass_fields__}
+        if isinstance(updates, GoalAutopilotConfig):
+            new_cfg = updates.normalized()
+        else:
+            merged = {**self.config.to_dict(), **{k: v for k, v in updates.items() if k in known and v is not None}}
+            new_cfg = GoalAutopilotConfig(**merged).normalized()
+
+        # Store short filenames for media inside state/media/ so config stays portable
+        mdir = Path(self._get_cfg().state_dir) / "media"
+        portable_media: list[str] = []
+        for mf in new_cfg.media_files:
+            p = Path(str(mf))
+            if (mdir / p.name).is_file():
+                portable_media.append(p.name)
+            elif str(mf).strip():
+                portable_media.append(str(mf).strip())
+
+        self.config = new_cfg
+        if self.running:
+            # Hot-apply live target / max_rounds to active items immediately
+            for it in self.items.values():
+                if it["phase"] in ("queued", "uploading", "appealing", "monitoring"):
+                    it["target_views"] = new_cfg.target_views
+                    it["max_rounds"] = new_cfg.max_rounds
+            self._save_persisted_state()
+
+        try:
+            fp = self._config_file
+            fp.parent.mkdir(parents=True, exist_ok=True)
+            disk_dict = new_cfg.to_dict()
+            disk_dict["media_files"] = portable_media
+            fp.write_text(json.dumps(disk_dict, indent=2, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+
+        self._emit(
+            f"💾 Настройки Автопилота сохранены (цель={new_cfg.target_views}, пот.={new_cfg.threads}, "
+            f"постов={new_cfg.copies_per_round}, ожидание={new_cfg.reupload_wait_minutes}м)",
+            "success",
+            "autopilot",
+        )
+        return self.get_config_payload()
+
+    def get_config_payload(self) -> dict[str, Any]:
+        mdir = Path(self._get_cfg().state_dir) / "media"
+        d = self.config.to_dict()
+        d["media_files"] = [
+            Path(str(m)).name if (mdir / Path(str(m)).name).is_file() else str(m)
+            for m in (d.get("media_files") or [])
+        ]
+        return {
+            "ok": True,
+            "config": d,
+            "presets": AUTOPILOT_PRESETS,
+            "running": self.running,
+        }
 
     def _emit(self, text: str, level: str = "info", kind: str = "autopilot") -> None:
         if self._on_event:
@@ -332,16 +559,10 @@ class GoalAutopilotManager:
                 "Не выбраны креативы для автопилота (загрузите фото/видео в библиотеку state/media/)."
             )
 
-        # Normalize safe bounds
-        cfg.target_views = max(50, min(500_000, int(cfg.target_views)))
-        cfg.copies_per_round = max(1, min(12, int(cfg.copies_per_round)))
-        cfg.topup_copies = max(1, min(cfg.copies_per_round, int(cfg.topup_copies)))
-        cfg.max_rounds = max(1, min(6, int(cfg.max_rounds)))
-        cfg.threads = max(1, min(10, int(cfg.threads)))
-        cfg.appeal_threads = max(1, min(10, int(cfg.appeal_threads)))
-        cfg.monitor_interval_sec = max(15, min(600, int(cfg.monitor_interval_sec)))
-        cfg.reupload_wait_minutes = max(2, min(180, int(cfg.reupload_wait_minutes)))
-        cfg.max_patience_minutes = max(cfg.reupload_wait_minutes, min(240, int(cfg.max_patience_minutes)))
+        cfg = cfg.normalized()
+        cfg.media_files = media_paths
+        # Persist user's chosen config cleanly before launching
+        self.save_config(cfg)
         cfg.media_files = media_paths
 
         candidates = self._select_candidate_accounts(cfg)

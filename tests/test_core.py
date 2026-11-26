@@ -1419,7 +1419,8 @@ def test_web_goal_autopilot_api_endpoints(tmp_path: Path) -> None:
     from kintaro_auto.web import create_web_app
 
     cfg_path = tmp_path / "config.toml"
-    cfg_path.write_text(f'state_dir = "{tmp_path / "state"}"\n', encoding="utf-8")
+    sdir = tmp_path / "state"
+    cfg_path.write_text(f'state_dir = "{sdir}"\n', encoding="utf-8")
     app = create_web_app(cfg_path)
     with TestClient(app) as tc:
         st = tc.get("/api/state").json()
@@ -1429,3 +1430,42 @@ def test_web_goal_autopilot_api_endpoints(tmp_path: Path) -> None:
         assert r_st.status_code == 200 and r_st.json()["ok"] is True
         r_cp = tc.get("/api/autopilot/goal/copy?scope=reached&fmt=lines")
         assert r_cp.status_code == 200 and r_cp.json()["count"] == 0
+
+        # Saved Autopilot configuration & built-in strategy presets
+        r_cfg = tc.get("/api/autopilot/goal/config")
+        assert r_cfg.status_code == 200
+        body_cfg = r_cfg.json()
+        assert body_cfg["config"]["target_views"] == 600
+        preset_ids = {p["id"] for p in body_cfg["presets"]}
+        assert {"standard_600", "turbo_600", "night_safe_600", "viral_post_1000"} <= preset_ids
+
+        r_save = tc.post(
+            "/api/autopilot/goal/config",
+            json={
+                "target_views": 850,
+                "target_mode": "max_post",
+                "threads": 4,
+                "appeal_threads": 4,
+                "copies_per_round": 6,
+                "topup_copies": 2,
+                "reupload_wait_minutes": 30,
+                "max_patience_minutes": 60,
+                "delay_min_sec": 12.0,
+                "delay_max_sec": 18.0,
+                "description": "#custom #fyp",
+                "auto_music_query": "Phonk",
+            },
+        )
+        assert r_save.status_code == 200
+        assert r_save.json()["config"]["target_views"] == 850
+        assert r_save.json()["config"]["target_mode"] == "max_post"
+        assert (sdir / "autopilot_config.json").is_file()
+
+    # Verify saved config survives server restart!
+    app2 = create_web_app(cfg_path)
+    with TestClient(app2) as tc2:
+        reloaded = tc2.get("/api/autopilot/goal/config").json()["config"]
+        assert reloaded["target_views"] == 850
+        assert reloaded["target_mode"] == "max_post"
+        assert reloaded["threads"] == 4
+        assert reloaded["auto_music_query"] == "Phonk"

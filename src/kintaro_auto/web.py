@@ -2399,6 +2399,15 @@ def create_web_app(
     async def goal_autopilot_status_api() -> dict[str, Any]:
         return goal_autopilot.snapshot()
 
+    @app.get("/api/autopilot/goal/config")
+    async def goal_autopilot_get_config_api() -> dict[str, Any]:
+        return goal_autopilot.get_config_payload()
+
+    @app.post("/api/autopilot/goal/config")
+    async def goal_autopilot_save_config_api(req: GoalAutopilotStartRequest) -> dict[str, Any]:
+        hub.reload_env()
+        return goal_autopilot.save_config(req.model_dump())
+
     @app.post("/api/autopilot/goal/start")
     async def goal_autopilot_start_api(req: GoalAutopilotStartRequest) -> dict[str, Any]:
         hub.reload_env()

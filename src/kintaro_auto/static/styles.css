@@ -643,9 +643,9 @@ html[data-theme="dark"] .kpi-ic.teal { background: rgba(54, 115, 91, 0.24); colo
   max-width: 420px;
   position: relative;
 }
-.search-box input {
+.search-box input[type="text"] {
   width: 100%;
-  padding-left: 34px;
+  padding: 8px 12px 8px 36px;
   border-radius: 10px;
   background: var(--surface-subtle);
 }
@@ -655,7 +655,8 @@ html[data-theme="dark"] .kpi-ic.teal { background: rgba(54, 115, 91, 0.24); colo
   top: 50%;
   transform: translateY(-50%);
   color: var(--muted);
-  font-size: 13px;
+  display: grid;
+  place-items: center;
   pointer-events: none;
 }
 

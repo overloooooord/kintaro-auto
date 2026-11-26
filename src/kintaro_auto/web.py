@@ -2406,7 +2406,7 @@ def create_web_app(
         if not media_files:
             # Convenience: fall back to available creatives in state/media/
             lib = list_media_library(Path(hub.cfg.state_dir))
-            media_files = [f["name"] for f in lib if f.get("name")]
+            media_files = sorted(f["name"] for f in lib if f.get("name"))
         try:
             gcfg = GoalAutopilotConfig(
                 target_views=req.target_views,

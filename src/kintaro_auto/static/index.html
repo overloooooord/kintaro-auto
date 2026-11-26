@@ -253,7 +253,9 @@
             <div class="table-head-bar">
               <div class="toolbar-row">
                 <div class="search-box">
-                  <span class="search-ic">🔍</span>
+                  <span class="search-ic">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                  </span>
                   <input type="text" id="accSearch" placeholder="Поиск по @handle или email" oninput="renderAccounts()" />
                 </div>
                 <div class="pills">
@@ -309,35 +311,45 @@
         <section id="view-autopilot" class="hidden">
           <div class="kpi-grid">
             <div class="kpi-card" style="cursor:default;">
-              <div class="kpi-ic teal">🎯</div>
+              <div class="kpi-ic teal">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+              </div>
               <div>
                 <div class="kpi-val mono" id="apKpiTarget">600</div>
                 <div class="kpi-lbl">Цель просм. / акк</div>
               </div>
             </div>
             <div class="kpi-card" style="cursor:default;">
-              <div class="kpi-ic ok">✓</div>
+              <div class="kpi-ic ok">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1"><polyline points="20 6 9 17 4 12"/></svg>
+              </div>
               <div>
                 <div class="kpi-val mono" id="apKpiReached">0</div>
                 <div class="kpi-lbl">Достигли 600+</div>
               </div>
             </div>
             <div class="kpi-card" style="cursor:default;">
-              <div class="kpi-ic info">⚡</div>
+              <div class="kpi-ic info">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+              </div>
               <div>
                 <div class="kpi-val mono" id="apKpiActive">0</div>
                 <div class="kpi-lbl">В работе сейчас</div>
               </div>
             </div>
             <div class="kpi-card" style="cursor:default;">
-              <div class="kpi-ic warn">👁</div>
+              <div class="kpi-ic warn">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              </div>
               <div>
                 <div class="kpi-val mono" id="apKpiViews">0</div>
                 <div class="kpi-lbl">Налито просмотров</div>
               </div>
             </div>
             <div class="kpi-card" style="cursor:default;">
-              <div class="kpi-ic slate">📊</div>
+              <div class="kpi-ic slate">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+              </div>
               <div>
                 <div class="kpi-val mono" id="apKpiPosts">0 / 0</div>
                 <div class="kpi-lbl">Постов / Апелляций</div>

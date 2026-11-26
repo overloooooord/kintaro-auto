@@ -434,8 +434,8 @@ function sendSelectedToAutopilot() {
 async function loadMediaLibrary() {
   try {
     const r = await apiJson('/api/media');
-    MEDIA_LIBRARY = r.files || [];
-    // Auto-select available library creatives if nothing chosen yet
+    MEDIA_LIBRARY = (r.files || []).slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+    // Auto-select available library creatives in slide order if nothing chosen yet
     if (AP_MEDIA_PICK.size === 0 && MEDIA_LIBRARY.length > 0) {
       MEDIA_LIBRARY.forEach(f => AP_MEDIA_PICK.add(f.name));
     }
@@ -596,7 +596,7 @@ async function startGoalAutopilot() {
   if (scope === 'selected' && !account_ids.length) {
     return toast('Сначала выберите аккаунты галочками на вкладке «Аккаунты»', 'warn');
   }
-  const media_files = Array.from(AP_MEDIA_PICK);
+  const media_files = MEDIA_LIBRARY.map(f => f.name).filter(name => AP_MEDIA_PICK.has(name));
   if (!media_files.length) {
     return toast('Выберите хотя бы один креатив из библиотеки', 'warn');
   }

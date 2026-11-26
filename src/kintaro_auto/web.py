@@ -34,6 +34,7 @@ from kintaro_auto.appeals import (
     sort_account_into_folder,
     wait_and_appeal_settle,
 )
+from kintaro_auto.autopilot import GoalAutopilotConfig, GoalAutopilotManager
 from kintaro_auto.captions import prepare_description_and_mentions
 from kintaro_auto.client import KintaroClient
 from kintaro_auto.config import AppConfig, load_config
@@ -193,6 +194,8 @@ class DashboardHub:
         self.watchdog_threads: int = 5
         self.watchdog_cycles: int = 0
         self.watchdog_next_run_ts: float | None = None
+        self.busy_upload_accounts: set[str] = set()
+        self.autopilot_managed_accounts: set[str] = set()
 
     def _load_audit_cache(self) -> dict[str, dict[str, Any]]:
         if self.cache_file.exists():
@@ -374,7 +377,14 @@ class DashboardHub:
                 self.watchdog_next_run_ts = None
                 self.watchdog_cycles += 1
                 self.reload_env()
-                targets = [a for a in self.store.list_accounts() if a.authenticated and a.device]
+                targets = [
+                    a
+                    for a in self.store.list_accounts()
+                    if a.authenticated
+                    and a.device
+                    and a.account_id not in self.busy_upload_accounts
+                    and a.account_id not in self.autopilot_managed_accounts
+                ]
 
                 def _prio(acc: AccountRecord) -> tuple[int, str]:
                     cached = self.audit_cache.get(acc.account_id)
@@ -398,6 +408,8 @@ class DashboardHub:
                         await asyncio.sleep(idx * 0.4)
                     async with sem:
                         if not self.watchdog_enabled:
+                            return
+                        if aid in self.busy_upload_accounts or aid in self.autopilot_managed_accounts:
                             return
                         self.worker_enter(jid, aid)
                         try:
@@ -663,6 +675,46 @@ class ShadowCheckerRequest(BaseModel):
     zero_view_threshold_minutes: float = 20.0
 
 
+class GoalAutopilotStartRequest(BaseModel):
+    target_views: int = 600
+    target_mode: str = "total"
+    media_files: list[str] = []
+    description: str = "#piratetoken #piratetokenshop #blackknight #pirateshop #fyp"
+    auto_music_query: str = "Fortnite"
+    photo_mode: str = "anti_unoriginal"
+    copies_per_round: int = 6
+    topup_copies: int = 3
+    protect_views_threshold: int = 150
+    max_rounds: int = 3
+    threads: int = 3
+    appeal_threads: int = 3
+    monitor_interval_sec: int = 90
+    reupload_wait_minutes: int = 25
+    growth_extend_views: int = 35
+    max_patience_minutes: int = 55
+    region: str = "US"
+    app_locale: str = "en_US"
+    restart_every_n: int = 3
+    delay_min_sec: float = 14.0
+    delay_max_sec: float = 20.0
+    randomize_tags: bool = True
+    pin_sticky_proxy: bool = True
+    override_proxy_country: str = ""
+    auto_appeal_2048: bool = True
+    auto_appeal_studio: bool = True
+    hide_rejected: bool = True
+    delete_old_on_first_round: bool = False
+    scope: str = "clean_empty"
+    account_ids: list[str] = []
+    max_accounts: int = 0
+    auto_refill_pool: bool = True
+    appeal_quiet_seconds: float = 45.0
+    appeal_max_wait_seconds: float = 180.0
+    appeal_text: str = (
+        "Our content is original, authentic, and strictly follows all TikTok Community Guidelines."
+    )
+
+
 class ConfigUpdateRequest(BaseModel):
     api_key: str | None = None
     max_parallel_accounts: int | None = None
@@ -698,6 +750,8 @@ def create_web_app(
         try:
             yield
         finally:
+            if goal_autopilot.running:
+                goal_autopilot.stop()
             hub.stop_watchdog()
             if hub.watchdog_task:
                 try:
@@ -720,6 +774,18 @@ def create_web_app(
             text, level, kind=kind, silent_log=not bool(text)
         ),
         on_audit=_on_unban_audit,
+    )
+
+    goal_autopilot = GoalAutopilotManager(
+        get_cfg=lambda: hub.cfg,
+        get_store=lambda: hub.store,
+        get_audit_cache=lambda: hub.audit_cache,
+        on_event=lambda text, level, kind: hub.push_event(
+            text, level, kind=kind, silent_log=not bool(text)
+        ),
+        on_audit=_on_unban_audit,
+        busy_upload_accounts=hub.busy_upload_accounts,
+        managed_accounts=hub.autopilot_managed_accounts,
     )
 
     class _HubLogHandler(logging.Handler):
@@ -763,6 +829,7 @@ def create_web_app(
                 else None,
             },
             "unban_queue": unban_queue.snapshot(),
+            "goal_autopilot": goal_autopilot.snapshot(),
             "logs": hub.logs[-120:],
         }
 
@@ -1825,9 +1892,11 @@ def create_web_app(
         def _camp_progress(aid: str, msg: str, meta: dict[str, Any]) -> None:
             st = meta.get("status")
             if st in ("completed", "partial", "error", "upload_failed"):
+                hub.busy_upload_accounts.discard(aid)
                 hub.worker_exit(jid, aid)
                 hub.step_job(jid)
             else:
+                hub.busy_upload_accounts.add(aid)
                 hub.worker_enter(jid, aid)
             hub.push_event(f"[{aid}] {msg}", "info", kind="audit_updated")
 
@@ -2324,6 +2393,77 @@ def create_web_app(
     async def delete_autopilot_api(job_id: str) -> dict[str, Any]:
         autopilot.delete_job(job_id)
         return {"ok": True, "jobs": autopilot.list_jobs()}
+
+    # ── Goal-Driven Smart Autopilot ("Автопилот 600") ────────────────────────
+    @app.get("/api/autopilot/goal/status")
+    async def goal_autopilot_status_api() -> dict[str, Any]:
+        return goal_autopilot.snapshot()
+
+    @app.post("/api/autopilot/goal/start")
+    async def goal_autopilot_start_api(req: GoalAutopilotStartRequest) -> dict[str, Any]:
+        hub.reload_env()
+        media_files = list(req.media_files or [])
+        if not media_files:
+            # Convenience: fall back to available creatives in state/media/
+            lib = list_media_library(Path(hub.cfg.state_dir))
+            media_files = [f["name"] for f in lib if f.get("name")]
+        try:
+            gcfg = GoalAutopilotConfig(
+                target_views=req.target_views,
+                target_mode=req.target_mode,
+                media_files=media_files,
+                description=req.description,
+                auto_music_query=req.auto_music_query,
+                photo_mode=req.photo_mode,
+                copies_per_round=req.copies_per_round,
+                topup_copies=req.topup_copies,
+                protect_views_threshold=req.protect_views_threshold,
+                max_rounds=req.max_rounds,
+                threads=req.threads,
+                appeal_threads=req.appeal_threads,
+                monitor_interval_sec=req.monitor_interval_sec,
+                reupload_wait_minutes=req.reupload_wait_minutes,
+                growth_extend_views=req.growth_extend_views,
+                max_patience_minutes=req.max_patience_minutes,
+                region=req.region,
+                app_locale=req.app_locale,
+                restart_every_n=req.restart_every_n,
+                delay_min_sec=req.delay_min_sec,
+                delay_max_sec=req.delay_max_sec,
+                randomize_tags=req.randomize_tags,
+                pin_sticky_proxy=req.pin_sticky_proxy,
+                override_proxy_country=req.override_proxy_country,
+                auto_appeal_2048=req.auto_appeal_2048,
+                auto_appeal_studio=req.auto_appeal_studio,
+                hide_rejected=req.hide_rejected,
+                delete_old_on_first_round=req.delete_old_on_first_round,
+                scope=req.scope,
+                account_ids=req.account_ids,
+                max_accounts=req.max_accounts,
+                auto_refill_pool=req.auto_refill_pool,
+                appeal_quiet_seconds=req.appeal_quiet_seconds,
+                appeal_max_wait_seconds=req.appeal_max_wait_seconds,
+                appeal_text=req.appeal_text,
+            )
+            snap = goal_autopilot.start(gcfg)
+            return snap
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/autopilot/goal/stop")
+    async def goal_autopilot_stop_api() -> dict[str, Any]:
+        return goal_autopilot.stop()
+
+    @app.post("/api/autopilot/goal/clear")
+    async def goal_autopilot_clear_api() -> dict[str, Any]:
+        try:
+            return goal_autopilot.clear()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/autopilot/goal/copy")
+    async def goal_autopilot_copy_api(scope: str = "reached", fmt: str = "lines") -> dict[str, Any]:
+        return goal_autopilot.build_copy_payload(scope=scope, fmt=fmt)
 
     @app.post("/api/totp/generate")
     async def totp_generate_api(req: TotpRequest) -> dict[str, Any]:

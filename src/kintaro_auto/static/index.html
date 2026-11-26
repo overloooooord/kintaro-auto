@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>KINTARO FARM OS</title>
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 36 36'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%236366f1'/%3E%3Cstop offset='1' stop-color='%2306b6d4'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='36' height='36' rx='10' fill='url(%23g)'/%3E%3Ctext x='18' y='24' text-anchor='middle' fill='%23fff' font-family='sans-serif' font-weight='800' font-size='18'%3EK%3C/text%3E%3C/svg%3E" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 36 36'%3E%3Crect width='36' height='36' rx='10' fill='%2347745e'/%3E%3Ctext x='18' y='24' text-anchor='middle' fill='%23fff' font-family='sans-serif' font-weight='800' font-size='18'%3EK%3C/text%3E%3C/svg%3E" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -13,517 +13,841 @@
 <body>
 
 <div class="shell">
-  <!-- COMPACT 5-TAB SIDEBAR -->
+  <!-- CALM SIDEBAR -->
   <aside class="rail">
-    <div class="brand">
-      <div class="brand-mark">K</div>
-      <div>
-        <div class="brand-name">KINTARO FARM OS</div>
-        <div class="brand-sub">TikTok Panel</div>
+    <div class="brand-row">
+      <div class="brand">
+        <div class="brand-mark">K</div>
+        <div>
+          <div class="brand-name">KINTARO</div>
+          <div class="brand-sub">FARM OS</div>
+        </div>
+      </div>
+      <span class="ver-chip mono">v5.0</span>
+    </div>
+
+    <div class="ws-card">
+      <div class="ws-avatar">F</div>
+      <div style="min-width:0;">
+        <div class="ws-title">Farm workspace</div>
+        <div class="ws-sub">
+          <span class="dot on" style="width:6px;height:6px;box-shadow:none;"></span>
+          <span>локальный контур</span>
+        </div>
       </div>
     </div>
 
+    <div class="nav-section">Рабочее пространство</div>
+
     <button class="nav-item active" data-view="accounts" onclick="switchView('accounts')">
-      <span class="nav-left"><span>👥</span><span>Аккаунты</span></span>
+      <span class="nav-left">
+        <span class="nav-ic">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        </span>
+        <span>Аккаунты</span>
+      </span>
       <span class="nav-pill mono" id="navAccCnt">0</span>
     </button>
+
+    <button class="nav-item" data-view="autopilot" onclick="switchView('autopilot')">
+      <span class="nav-left">
+        <span class="nav-ic">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
+        </span>
+        <span>Автопилот</span>
+      </span>
+      <span class="nav-pill sage mono" id="navAutoPill">600</span>
+    </button>
+
     <button class="nav-item" data-view="upload" onclick="switchView('upload')">
-      <span class="nav-left"><span>🚀</span><span>Залив</span></span>
+      <span class="nav-left">
+        <span class="nav-ic">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        </span>
+        <span>Залив</span>
+      </span>
+      <span class="nav-pill" style="font-size:10.5px;">Studio</span>
     </button>
+
     <button class="nav-item" data-view="unban" onclick="switchView('unban')">
-      <span class="nav-left"><span>⚡</span><span>Ограны</span></span>
-      <span class="nav-pill mono hidden" id="navOgranCnt">0</span>
+      <span class="nav-left">
+        <span class="nav-ic">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        </span>
+        <span>Ограны</span>
+      </span>
+      <span class="nav-pill err mono hidden" id="navOgranCnt">0</span>
     </button>
+
     <button class="nav-item" data-view="import" onclick="switchView('import')">
-      <span class="nav-left"><span>📥</span><span>Импорт</span></span>
+      <span class="nav-left">
+        <span class="nav-ic">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        </span>
+        <span>Импорт</span>
+      </span>
     </button>
+
     <button class="nav-item" data-view="tools" onclick="switchView('tools')">
-      <span class="nav-left"><span>⚙️</span><span>Ещё</span></span>
+      <span class="nav-left">
+        <span class="nav-ic">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+        </span>
+        <span>Инструменты</span>
+      </span>
     </button>
 
     <div class="rail-spacer"></div>
 
     <div class="rail-foot">
-      <div class="wd-row" onclick="toggleWatchdog()" title="Авто-опрос и снятие огранов в 5 потоков каждые 70–115с (0$)">
-        <span style="display:flex;align-items:center;gap:7px;">
-          <span id="wdDot" class="dot"></span>
-          <span>Сторож 24/7</span>
-        </span>
-        <strong class="mono" id="wdLabel" style="font-size:11px;color:var(--muted);">OFF</strong>
+      <div class="wd-card" onclick="toggleWatchdog()" title="Авто-опрос и снятие огранов в 5 потоков каждые 70–115с ($0)">
+        <div style="min-width:0;">
+          <div class="wd-title">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--sage);"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+            <span>Сторож 24/7</span>
+          </div>
+          <div class="wd-sub mono" id="wdLabel">OFF · циклы 0</div>
+        </div>
+        <div class="switch" id="wdSwitch"></div>
+      </div>
+
+      <div class="conn-row">
+        <div class="conn-left">
+          <span class="dot on" id="connDot"></span>
+          <span class="mono" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" id="connAddr">127.0.0.1:8080</span>
+        </div>
+        <span class="ver-chip mono" id="connBadge" style="color:var(--ok);border-color:var(--ok-border);background:var(--ok-bg);">LIVE</span>
       </div>
     </div>
   </aside>
 
   <!-- MAIN COLUMN -->
   <div class="main-col">
-    <!-- SLIM TOPBAR (NO OVERFLOW) -->
+    <!-- UTILITY TOPBAR -->
     <header class="topbar">
-      <div class="top-left">
-        <div class="page-title" id="topTitle">Аккаунты</div>
-        <div class="stat-strip">
-          <button class="stat-pill" onclick="jumpFilter('all')">Всего: <strong class="mono" id="stTotal">0</strong></button>
-          <button class="stat-pill" onclick="jumpFilter('authed')">Вход: <strong class="mono" id="stAuth">0</strong></button>
-          <button class="stat-pill ok" onclick="jumpFilter('eligible')">Чистых: <strong class="mono" id="stClean">0</strong></button>
-          <button class="stat-pill warn" onclick="jumpFilter('appealing')">Проверка: <strong class="mono" id="stApp">0</strong></button>
-          <button class="stat-pill err" onclick="jumpFilter('action_required')">Огран: <strong class="mono" id="stAct">0</strong></button>
-        </div>
+      <div class="crumb">
+        <span>Панель</span>
+        <span>›</span>
+        <strong id="topTitle">Аккаунты</strong>
       </div>
 
-      <div class="top-right">
-        <div id="jobPill" class="job-pill hidden">
-          <span class="spin"></span>
-          <span id="jobText">Работает...</span>
+      <div class="top-utils">
+        <button class="btn btn-sm btn-ghost" onclick="syncNow()" title="Обновить состояние">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          <span>Синхронизация</span>
+        </button>
+        <button class="btn btn-icon btn-ghost" id="btnTheme" onclick="toggleTheme()" title="Переключить светлую/тёмную тему">🌙</button>
+        <button class="btn btn-icon btn-ghost" onclick="openSettingsQuick()" title="Настройки">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
+        <div class="op-chip">
+          <div class="op-av">KF</div>
+          <div>
+            <div class="op-name">Kintaro</div>
+            <div class="op-role">оператор</div>
+          </div>
         </div>
-        <button class="btn btn-sm" id="btnTopAudit" onclick="auditAll()">↻ Аудит</button>
-        <button class="btn btn-sm btn-primary" id="btnTopAppeal" onclick="appealAll()">⚡ Снять ограны</button>
       </div>
     </header>
 
     <main class="content">
-      <!-- VIEW 1: ACCOUNTS (CLEAN TABLE) -->
-      <section id="view-accounts">
-        <div class="toolbar">
-          <div class="search-box">
-            <input type="text" id="accSearch" placeholder="Поиск @handle, email..." oninput="renderAccounts()" />
+      <div class="content-inner">
+
+        <!-- PAGE HERO HEADER (SHARED CALM LAYOUT) -->
+        <div class="page-hero">
+          <div>
+            <h1 class="page-h1" id="heroTitle">Аккаунты</h1>
+            <p class="page-sub" id="heroSub">Здоровье профилей, входы и массовые действия — в одном спокойном месте.</p>
           </div>
-          <div class="pills">
-            <button class="pill active" data-f="all" onclick="setFilter('all', this)">Все</button>
-            <button class="pill" data-f="eligible" onclick="setFilter('eligible', this)">Чистые</button>
-            <button class="pill" data-f="appealing" onclick="setFilter('appealing', this)">Проверка</button>
-            <button class="pill" data-f="action_required" onclick="setFilter('action_required', this)">Огран</button>
-            <button class="pill" data-f="unauth" onclick="setFilter('unauth', this)">Без входа</button>
-          </div>
-          <div style="display:flex;gap:6px;align-items:center;">
-            <button class="btn btn-sm" onclick="copyAccounts('clean')" title="Скопировать чистые аккаунты">📋 Чистые</button>
-            <button class="btn btn-sm" onclick="copyAccounts('uploaded')" title="Скопировать пролитые аккаунты">📋 Пролитые</button>
-            <button class="btn btn-sm" onclick="toggleSelectAll()">☑ Все</button>
-          </div>
-        </div>
-
-        <div class="table-wrap">
-          <table class="tbl">
-            <thead>
-              <tr>
-                <th style="width:36px;"></th>
-                <th>Аккаунт</th>
-                <th>Статус</th>
-                <th>Посты / Просм.</th>
-                <th>Гео / Прокси</th>
-                <th style="text-align:right;">Действия</th>
-              </tr>
-            </thead>
-            <tbody id="accountsTbody"></tbody>
-          </table>
-        </div>
-      </section>
-
-      <!-- VIEW 2: UPLOAD & CAMPAIGN (SIMPLE & CLEAN) -->
-      <section id="view-upload" class="hidden">
-        <div class="grid-2">
-          <div class="card">
-            <div class="card-head">
-              <div class="card-title">Новый залив</div>
-              <button class="btn btn-xs" onclick="previewUniquifier()">👁 Превью фото</button>
+          <div class="hero-actions">
+            <div class="job-pill" id="jobPill">
+              <span class="dot on" id="jobDot"></span>
+              <span class="spin hidden" id="jobSpin"></span>
+              <span id="jobText">Задач нет</span>
             </div>
-
-            <div id="mediaDropzone" class="dropzone" onclick="document.getElementById('upFiles').click()">
-              <div style="font-size:22px;margin-bottom:4px;">🎬</div>
-              <div style="font-weight:600;">Перетащи видео MP4 или 1–10 фото</div>
-              <div class="muted" style="font-size:11.5px;margin-top:2px;">или нажми для выбора файлов</div>
-              <input type="file" id="upFiles" multiple accept=".mp4,.jpg,.jpeg,.png,.webp" class="hidden" onchange="handleMediaFiles(this.files)" />
-            </div>
-            <div id="mediaThumbs" class="thumbs"></div>
-            <div id="uniqPreviewBox" class="hidden" style="margin-top:10px;display:grid;grid-template-columns:1fr 1fr;gap:8px;"></div>
-
-            <div class="field" style="margin-top:12px;">
-              <label>Описание и хэштеги</label>
-              <input type="text" id="upDesc" placeholder="#fyp #viral {Вариант А|Вариант Б}" value="#piratetoken #piratetokenshop #blackknight #pirateshop #fyp" />
-            </div>
-
-            <div class="row-3" style="margin-bottom:12px;">
-              <div class="field" style="margin:0;">
-                <label>Постов / акк</label>
-                <input type="number" id="upCopies" value="6" min="1" max="30" />
-              </div>
-              <div class="field" style="margin:0;">
-                <label>Потоков</label>
-                <input type="number" id="upThreads" value="5" min="1" max="20" />
-              </div>
-              <div class="field" style="margin:0;">
-                <label>Уникализация</label>
-                <select id="upPhotoMode">
-                  <option value="anti_unoriginal" selected>anti_unoriginal (без UNORIGINAL_NR)</option>
-                  <option value="minimal_snow">minimal_snow</option>
-                  <option value="minimal">minimal</option>
-                  <option value="stealth">stealth</option>
-                  <option value="medium">medium</option>
-                  <option value="boosted">boosted</option>
-                  <option value="ultra_hard">ultra_hard</option>
-                  <option value="off">Выкл</option>
-                </select>
-              </div>
-            </div>
-
-            <label class="toggle-row">
-              <span>🗑 Удалить прошлые посты перед заливом</span>
-              <input type="checkbox" id="upDelOld" checked class="chk" />
-            </label>
-            <label class="toggle-row">
-              <span>⚡ Снять ограны 2048 (до / между / после)</span>
-              <input type="checkbox" id="upAutoAppeal" checked class="chk" />
-            </label>
-            <label class="toggle-row" title="Аккаунт сразу уходит в очередь дожима, а поток залива не простаивает 60с и берёт следующий">
-              <span>🔄 Дожимать волны 2048 в отдельных потоках</span>
-              <input type="checkbox" id="upDeferUnban" checked class="chk" />
-            </label>
-
-            <details class="adv">
-              <summary>Доп. настройки (музыка, паузы, регион, рестарт, повтор)</summary>
-              <div class="adv-body">
-                <div class="row-2" style="margin-top:8px;">
-                  <div class="field">
-                    <label>Авто-музыка (поиск)</label>
-                    <input type="text" id="upMusic" value="Fortnite" placeholder="Пусто = без музыки" />
-                  </div>
-                  <div class="field">
-                    <label>Регион залива</label>
-                    <input type="text" id="upRegion" value="US" maxlength="2" />
-                  </div>
-                </div>
-                <div class="row-3">
-                  <div class="field" style="margin:0;">
-                    <label>Пауза мин (с)</label>
-                    <input type="number" id="upDelayMin" value="14" min="0" />
-                  </div>
-                  <div class="field" style="margin:0;">
-                    <label>Пауза макс (с)</label>
-                    <input type="number" id="upDelayMax" value="20" min="0" />
-                  </div>
-                  <div class="field" style="margin:0;">
-                    <label>Рестарт ТТ (N)</label>
-                    <input type="number" id="upRestartN" value="3" min="0" max="20" />
-                  </div>
-                </div>
-                <div class="row-2" style="margin-top:8px;">
-                  <div class="field" style="margin:0;">
-                    <label>Потоков дожима 2048</label>
-                    <input type="number" id="upQueueThreads" value="3" min="1" max="15" />
-                  </div>
-                  <div class="field" style="margin:0;">
-                    <label>Повтор поздних волн (мин, 0=выкл)</label>
-                    <input type="number" id="upDelayedRecheck" value="12" min="0" max="120" />
-                  </div>
-                </div>
-                <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;font-size:12px;">
-                  <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="upRandTags" checked class="chk" /> Перемешивать хэштеги</label>
-                  <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="upStickyProxy" class="chk" /> Sticky bpproxy</label>
-                </div>
-              </div>
-            </details>
-
-            <div style="display:flex;gap:8px;margin-top:4px;">
-              <button class="btn btn-primary btn-lg" id="btnRunCampaign" style="flex:1;" onclick="submitCampaign()">🚀 Запустить залив</button>
-              <button class="btn btn-lg" id="btnQuick1" onclick="submitSingleUpload()" title="Быстрый одиночный пост (1 копия)">1 пост</button>
-            </div>
-          </div>
-
-          <div class="card">
-            <div class="card-head">
-              <div class="card-title">Аккаунты <span class="muted mono" id="upPickStat" style="font-weight:400;font-size:12px;">(все)</span></div>
-              <div class="pills">
-                <button class="btn btn-xs" onclick="pickUploadSet('all')">Все</button>
-                <button class="btn btn-xs" onclick="pickUploadSet('clean')">Чистые</button>
-                <button class="btn btn-xs" onclick="pickUploadSet('unauth')">Без входа</button>
-                <button class="btn btn-xs btn-ghost" onclick="pickUploadSet('none')">Сброс</button>
-              </div>
-            </div>
-            <div class="field" style="margin-bottom:8px;">
-              <input type="text" id="upAccFilter" placeholder="Фильтр аккаунтов..." oninput="renderUploadPicker()" />
-            </div>
-            <div id="uploadPickList" class="pick-list"></div>
+            <button class="btn" id="btnTopAudit" onclick="auditAll()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              <span>Аудит</span>
+            </button>
+            <button class="btn btn-primary" id="btnTopAppeal" onclick="appealAll()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+              <span>Снять ограны</span>
+            </button>
           </div>
         </div>
-      </section>
 
-      <!-- VIEW 3: UNBAN 2048 QUEUE (CLEAN & SIMPLE) -->
-      <section id="view-unban" class="hidden">
-        <div class="grid-2">
-          <div class="card">
-            <div class="card-head">
-              <div class="card-title">Снятие огранов 2048</div>
-              <span class="badge b-dim mono" id="unbanStatusBadge">Ожидание</span>
-            </div>
-
-            <div class="field">
-              <label>Кого обработать</label>
-              <select id="unbanScope">
-                <option value="all">Все авторизованные аккаунты</option>
-                <option value="restricted">Только с активным ограном / проверкой</option>
-                <option value="uploaded">Только пролитые (последняя кампания)</option>
-                <option value="selected">Выбранные в списке справа</option>
-              </select>
-            </div>
-
-            <div class="row-3">
-              <div class="field">
-                <label>Потоков</label>
-                <select id="unbanThreads">
-                  <option value="1">1 (последовательно)</option>
-                  <option value="3" selected>3 потока</option>
-                  <option value="5">5 потоков</option>
-                  <option value="8">8 потоков</option>
-                  <option value="10">10 потоков</option>
-                </select>
+        <!-- ═══════════════════════════════════════════════════════════
+             VIEW 1: ACCOUNTS
+             ═══════════════════════════════════════════════════════════ -->
+        <section id="view-accounts">
+          <div class="kpi-grid">
+            <button class="kpi-card active" data-kpi="all" onclick="jumpFilter('all')">
+              <div class="kpi-ic slate">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
               </div>
-              <div class="field">
-                <label>Тишина волны (сек)</label>
-                <input type="number" id="unbanQuiet" value="60" min="0" max="180" />
+              <div>
+                <div class="kpi-val mono" id="stTotal">0</div>
+                <div class="kpi-lbl">Всего</div>
               </div>
-              <div class="field">
-                <label title="Повторная проверка поздних волн 2048 + Studio через N минут (0 = выкл)">Повтор (мин)</label>
-                <input type="number" id="unbanRecheckMin" value="12" min="0" max="120" />
+            </button>
+
+            <button class="kpi-card" data-kpi="authed" onclick="jumpFilter('authed')">
+              <div class="kpi-ic teal">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
               </div>
-            </div>
+              <div>
+                <div class="kpi-val mono" id="stAuth">0</div>
+                <div class="kpi-lbl">Вход</div>
+              </div>
+            </button>
 
-            <label class="toggle-row">
-              <span>⏳ Дождаться всех волн (0..10+ огранов)</span>
-              <input type="checkbox" id="unbanSettle" checked class="chk" />
-            </label>
-            <label class="toggle-row">
-              <span>🛡 Только Account updates (без постов Studio)</span>
-              <input type="checkbox" id="unbanOnly2048" checked class="chk" />
-            </label>
+            <button class="kpi-card" data-kpi="eligible" onclick="jumpFilter('eligible')">
+              <div class="kpi-ic ok">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1"><polyline points="20 6 9 17 4 12"/></svg>
+              </div>
+              <div>
+                <div class="kpi-val mono" id="stClean">0</div>
+                <div class="kpi-lbl">Чистые</div>
+              </div>
+            </button>
 
-            <div style="display:flex;gap:8px;margin-top:12px;">
-              <button class="btn btn-primary btn-lg" style="flex:1;" onclick="startUnbanQueue()">⚡ Запустить снятие</button>
-              <button class="btn btn-err btn-lg" onclick="stopUnbanQueue()">Стоп</button>
-            </div>
+            <button class="kpi-card" data-kpi="appealing" onclick="jumpFilter('appealing')">
+              <div class="kpi-ic warn">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              </div>
+              <div>
+                <div class="kpi-val mono" id="stApp">0</div>
+                <div class="kpi-lbl">На проверке</div>
+              </div>
+            </button>
 
-            <div id="unbanQueueBox" style="margin-top:14px;"></div>
+            <button class="kpi-card" data-kpi="action_required" onclick="jumpFilter('action_required')">
+              <div class="kpi-ic err">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              </div>
+              <div>
+                <div class="kpi-val mono" id="stAct">0</div>
+                <div class="kpi-lbl">Огран</div>
+              </div>
+            </button>
           </div>
 
-          <div class="card">
-            <div class="card-head">
-              <div class="card-title">Результаты и выбор</div>
-              <button class="btn btn-xs" onclick="toggleAllUnbanPick()">Все</button>
+          <div id="bulkBar" class="bulk-bar hidden">
+            <div style="display:flex;align-items:center;gap:8px;font-weight:600;color:var(--sage);">
+              <span>Выбрано: <span class="mono" id="bulkCount">0</span></span>
             </div>
-
-            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;">
-              <button class="btn btn-sm btn-ok" onclick="copyAccounts('clean')">📋 Чистые</button>
-              <button class="btn btn-sm btn-warn" onclick="copyAccounts('ogran_na_proverke')">📋 Проверка</button>
-              <button class="btn btn-sm btn-err" onclick="copyAccounts('ogran_ne_snyat')">📋 Не снят</button>
-              <button class="btn btn-sm" onclick="copyAccounts('uploaded')">📋 Пролитые</button>
-              <button class="btn btn-sm" onclick="copyAccounts('uploaded', 'usernames')">📋 @Юзы</button>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+              <button class="btn btn-sm btn-primary" onclick="runBulk('auth')">🔑 Войти</button>
+              <button class="btn btn-sm" onclick="runBulk('audit')">↻ Аудит</button>
+              <button class="btn btn-sm btn-ok" onclick="runBulk('appeal')">⚡ Снять ограны</button>
+              <button class="btn btn-sm" onclick="sendSelectedToAutopilot()">🧭 В Автопилот 600</button>
+              <button class="btn btn-sm" onclick="copySelected('lines')">📋 Копировать</button>
+              <button class="btn btn-sm btn-warn" onclick="runBulk('clean_posts')">🗑 Очистить посты</button>
+              <button class="btn btn-sm" onclick="promptBulkProxy()">🌐 Прокси</button>
+              <button class="btn btn-sm btn-err" onclick="runBulk('delete')">✕ Удалить</button>
+              <button class="btn btn-sm btn-ghost" onclick="clearSelection()">Снять</button>
             </div>
-
-            <div id="unbanPickList" class="pick-list"></div>
           </div>
-        </div>
-      </section>
 
-      <!-- VIEW 4: IMPORT (CLEAN 2-STEP) -->
-      <section id="view-import" class="hidden">
-        <div class="grid-2">
-          <div class="card">
-            <div class="card-head">
-              <div class="card-title">Импорт аккаунтов</div>
-              <button class="btn btn-xs" onclick="document.getElementById('txtFileInput').click()">📄 Загрузить .txt</button>
-              <input type="file" id="txtFileInput" accept=".txt,.csv" class="hidden" onchange="loadTxtFile(event)" />
-            </div>
-
-            <div class="field">
-              <label>Строки аккаунтов (<code class="mono">login:pass:outlook:...</code> или <code class="mono">user|pass|mail|TOTP</code>)</label>
-              <textarea id="impLines" style="min-height:160px;" oninput="scheduleLinePreview()" placeholder="Вставь список аккаунтов по одному на строку..."></textarea>
-            </div>
-
-            <div class="field">
-              <label>Прокси (оставь пустым для дефолтного: <span id="defProxyHint" class="mono">—</span>)</label>
-              <textarea id="impProxies" style="min-height:60px;" oninput="scheduleLinePreview()" placeholder="socks5://user:pass@host:port"></textarea>
-            </div>
-
-            <div class="row-2" style="margin-bottom:10px;">
-              <div class="field" style="margin:0;">
-                <label>Регион</label>
-                <select id="impRegion">
-                  <option value="US" selected>US</option>
-                  <option value="DE">DE</option>
-                  <option value="GB">GB</option>
-                </select>
+          <div class="card-flush">
+            <div class="table-head-bar">
+              <div class="toolbar-row">
+                <div class="search-box">
+                  <span class="search-ic">🔍</span>
+                  <input type="text" id="accSearch" placeholder="Поиск по @handle или email" oninput="renderAccounts()" />
+                </div>
+                <div class="pills">
+                  <button class="pill active" data-f="all" onclick="setFilter('all', this)">Все</button>
+                  <button class="pill" data-f="eligible" onclick="setFilter('eligible', this)">Чистые</button>
+                  <button class="pill" data-f="appealing" onclick="setFilter('appealing', this)">Проверка</button>
+                  <button class="pill" data-f="action_required" onclick="setFilter('action_required', this)">Огран</button>
+                  <button class="pill" data-f="unauth" onclick="setFilter('unauth', this)">Без входа</button>
+                </div>
               </div>
-              <div style="display:flex;flex-direction:column;justify-content:center;gap:5px;font-size:12.5px;">
-                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="impAutoLogin" checked class="chk" /> Авто-вход (Outlook/TOTP)</label>
-                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="impAutoClean" class="chk" /> Удалить прошлые посты</label>
-                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="impAutoAppeal" checked class="chk" /> Снять ограны</label>
+              <div class="toolbar-row" style="justify-content:flex-end;">
+                <button class="btn btn-sm" onclick="copyAccounts('clean', 'lines')">📋 Копировать чистые</button>
+                <button class="btn btn-sm" onclick="copyAccounts('uploaded', 'lines')">📋 Копировать пролитые</button>
+                <label class="chk-row" style="padding:4px 6px;">
+                  <input type="checkbox" class="chk" id="chkAll" onchange="toggleSelectAll()" />
+                  <span>Выбрать все</span>
+                </label>
               </div>
             </div>
 
-            <button class="btn btn-primary btn-lg" style="width:100%;" onclick="submitBatchImport()">📥 Импортировать и запустить</button>
+            <div class="tbl-wrap">
+              <table class="tbl">
+                <thead>
+                  <tr>
+                    <th style="width:36px;"></th>
+                    <th>Аккаунт</th>
+                    <th>Статус</th>
+                    <th>Посты / Просмотры</th>
+                    <th>Регион / Прокси</th>
+                    <th style="text-align:right;">Действия</th>
+                  </tr>
+                </thead>
+                <tbody id="accountsTbody"></tbody>
+              </table>
+            </div>
+
+            <div class="table-foot">
+              <span id="tableCountInfo">Показано 0 из 0</span>
+              <div style="display:flex;align-items:center;gap:14px;">
+                <span style="display:inline-flex;align-items:center;gap:6px;">
+                  <span class="dot on" style="width:6px;height:6px;box-shadow:none;"></span>
+                  <span>живое состояние</span>
+                </span>
+                <button class="btn btn-xs btn-ghost" onclick="switchView('unban')" style="color:var(--sage);font-weight:600;">Очередь огранов →</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ═══════════════════════════════════════════════════════════
+             VIEW 2: AUTOPILOT 600 (FLAGSHIP AUTONOMOUS ENGINE)
+             ═══════════════════════════════════════════════════════════ -->
+        <section id="view-autopilot" class="hidden">
+          <div class="kpi-grid">
+            <div class="kpi-card" style="cursor:default;">
+              <div class="kpi-ic teal">🎯</div>
+              <div>
+                <div class="kpi-val mono" id="apKpiTarget">600</div>
+                <div class="kpi-lbl">Цель просм. / акк</div>
+              </div>
+            </div>
+            <div class="kpi-card" style="cursor:default;">
+              <div class="kpi-ic ok">✓</div>
+              <div>
+                <div class="kpi-val mono" id="apKpiReached">0</div>
+                <div class="kpi-lbl">Достигли 600+</div>
+              </div>
+            </div>
+            <div class="kpi-card" style="cursor:default;">
+              <div class="kpi-ic info">⚡</div>
+              <div>
+                <div class="kpi-val mono" id="apKpiActive">0</div>
+                <div class="kpi-lbl">В работе сейчас</div>
+              </div>
+            </div>
+            <div class="kpi-card" style="cursor:default;">
+              <div class="kpi-ic warn">👁</div>
+              <div>
+                <div class="kpi-val mono" id="apKpiViews">0</div>
+                <div class="kpi-lbl">Налито просмотров</div>
+              </div>
+            </div>
+            <div class="kpi-card" style="cursor:default;">
+              <div class="kpi-ic slate">📊</div>
+              <div>
+                <div class="kpi-val mono" id="apKpiPosts">0 / 0</div>
+                <div class="kpi-lbl">Постов / Апелляций</div>
+              </div>
+            </div>
           </div>
 
-          <div style="display:flex;flex-direction:column;gap:14px;">
+          <div class="grid-auto">
+            <!-- LEFT: AUTOPILOT CONTROLS -->
             <div class="card">
-              <div class="card-head">
-                <div class="card-title">Проверка строк</div>
-                <span class="badge b-cyan mono" id="previewBadge">0</span>
+              <div class="card-title">
+                <span>Настройки Автопилота</span>
+                <span class="badge b-dim mono" id="apStatusBadge">Ожидание</span>
               </div>
-              <div id="previewBox" class="muted" style="max-height:280px;overflow-y:auto;font-size:12px;">
-                Вставь строки слева — покажу результат разбора.
+
+              <div class="row-2">
+                <div class="field">
+                  <label>Цель просмотров</label>
+                  <input type="number" id="apTargetViews" value="600" min="50" max="500000" step="50" />
+                </div>
+                <div class="field">
+                  <label>Условие цели</label>
+                  <select id="apTargetMode">
+                    <option value="total" selected>Сумма по аккаунту ≥ цели</option>
+                    <option value="max_post">Хотя бы 1 пост ≥ цели</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="row-2">
+                <div class="field">
+                  <label>Пул аккаунтов</label>
+                  <select id="apScope">
+                    <option value="clean_empty" selected>Чистые пустые (0 постов)</option>
+                    <option value="clean">Все чистые</option>
+                    <option value="all_authed">Все авторизованные</option>
+                    <option value="selected">Выбранные галочками</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>Лимит аккаунтов (0 = все)</label>
+                  <input type="number" id="apMaxAccs" value="0" min="0" max="500" />
+                </div>
+              </div>
+
+              <div class="field">
+                <label style="display:flex;justify-content:space-between;align-items:center;">
+                  <span>Креативы из библиотеки (<span class="mono" id="apMediaCnt">0</span>)</span>
+                  <button class="btn btn-xs" onclick="document.getElementById('apMediaUploadIn').click()">+ Загрузить</button>
+                </label>
+                <input id="apMediaUploadIn" type="file" multiple accept="image/*,video/mp4" class="hidden" onchange="uploadToMediaLibrary(this.files)" />
+                <div class="thumbs" id="apMediaGrid"></div>
+              </div>
+
+              <div class="field">
+                <label>Теги / описание (рандомизируются на каждом посте)</label>
+                <textarea id="apDesc" style="min-height:54px;">#piratetoken #piratetokenshop #blackknight #pirateshop #fyp</textarea>
+              </div>
+
+              <div class="row-2">
+                <div class="field">
+                  <label>Музыка</label>
+                  <input type="text" id="apMusic" value="Fortnite" />
+                </div>
+                <div class="field">
+                  <label>Уникализатор</label>
+                  <select id="apPhotoMode">
+                    <option value="anti_unoriginal" selected>anti_unoriginal (макс. защита)</option>
+                    <option value="minimal_snow">minimal_snow (классика)</option>
+                    <option value="boosted">boosted (усиленный)</option>
+                    <option value="stealth">stealth (лёгкий)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="row-3">
+                <div class="field">
+                  <label>Потоки залива</label>
+                  <input type="number" id="apThreads" value="3" min="1" max="10" />
+                </div>
+                <div class="field">
+                  <label>Постов/раунд</label>
+                  <input type="number" id="apCopies" value="6" min="1" max="12" />
+                </div>
+                <div class="field">
+                  <label>Макс. раундов</label>
+                  <input type="number" id="apMaxRounds" value="3" min="1" max="6" />
+                </div>
+              </div>
+
+              <details class="adv">
+                <summary>Умный мониторинг, долив и авто-апелляции</summary>
+                <div class="adv-body">
+                  <div class="row-3" style="margin-top:8px;">
+                    <div class="field">
+                      <label>Ждать (мин)</label>
+                      <input type="number" id="apWaitMin" value="25" min="2" max="180" />
+                    </div>
+                    <div class="field">
+                      <label>Опрос (сек)</label>
+                      <input type="number" id="apMonSec" value="90" min="15" max="600" />
+                    </div>
+                    <div class="field">
+                      <label>Долив (+шт)</label>
+                      <input type="number" id="apTopup" value="3" min="1" max="6" />
+                    </div>
+                  </div>
+                  <div class="row-2">
+                    <div class="field">
+                      <label>Порог сохранения живых постов</label>
+                      <input type="number" id="apProtectViews" value="150" min="0" max="5000" />
+                    </div>
+                    <div class="field">
+                      <label>Регион</label>
+                      <input type="text" id="apRegion" value="US" />
+                    </div>
+                  </div>
+                  <div style="display:flex;flex-direction:column;gap:7px;margin-top:4px;">
+                    <label class="chk-row"><input type="checkbox" class="chk" id="apAuto2048" checked /> Авто-апелляция 2048 (до, между и после постов)</label>
+                    <label class="chk-row"><input type="checkbox" class="chk" id="apAutoStudio" checked /> Авто-апелляция Studio UNORIGINAL_NR при мониторинге</label>
+                    <label class="chk-row"><input type="checkbox" class="chk" id="apRefill" checked /> Подхватывать новые чистые аккаунты автоматически</label>
+                    <label class="chk-row"><input type="checkbox" class="chk" id="apDelFirst" /> Удалить старые посты перед 1-м раундом</label>
+                  </div>
+                </div>
+              </details>
+
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+                <button class="btn btn-primary" style="flex:1;" id="btnApStart" onclick="startGoalAutopilot()">▶ Запустить автопилот</button>
+                <button class="btn btn-err" id="btnApStop" onclick="stopGoalAutopilot()">⏹ Стоп</button>
+                <button class="btn btn-ghost" onclick="clearGoalAutopilot()" title="Очистить завершённые">🗑</button>
+              </div>
+
+              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
+                <button class="btn btn-sm btn-ok" onclick="copyAutopilot('reached', 'lines')">📋 Копировать 600+ (строки)</button>
+                <button class="btn btn-sm" onclick="copyAutopilot('reached', 'summary')">📊 Сводка 600+</button>
+                <button class="btn btn-sm" onclick="copyAutopilot('all', 'urls')">🔗 Ссылки постов</button>
               </div>
             </div>
 
-            <details class="adv" style="margin:0;background:var(--surface);">
-              <summary>Импорт готовой папки сессий (.json / cookies.json)</summary>
-              <div class="adv-body" style="padding-top:10px;">
-                <div style="display:flex;gap:8px;">
-                  <input type="text" id="folderPathInput" placeholder="/path/to/sessions" />
+            <!-- RIGHT: LIVE AUTOPILOT FLEET MONITOR -->
+            <div class="card-flush">
+              <div class="table-head-bar">
+                <div class="toolbar-row">
+                  <div>
+                    <div style="font-weight:600;font-size:14px;">Живой мониторинг прогресса до цели</div>
+                    <div class="muted" style="font-size:12px;" id="apSummaryLine">Автопилот в режиме ожидания. Настройте параметры слева и нажмите «Запустить».</div>
+                  </div>
+                  <span class="badge b-sage mono" id="apElapsedBadge">00:00</span>
+                </div>
+              </div>
+
+              <div class="tbl-wrap">
+                <table class="tbl">
+                  <thead>
+                    <tr>
+                      <th>Аккаунт</th>
+                      <th>Прогресс до цели</th>
+                      <th>Фаза</th>
+                      <th>Раунд / Посты</th>
+                      <th>Обновлено</th>
+                    </tr>
+                  </thead>
+                  <tbody id="apTbody">
+                    <tr><td colspan="5" style="text-align:center;padding:38px;color:var(--muted);">Пока нет активного прогона автопилота</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ═══════════════════════════════════════════════════════════
+             VIEW 3: UPLOAD STUDIO
+             ═══════════════════════════════════════════════════════════ -->
+        <section id="view-upload" class="hidden">
+          <div class="grid-2">
+            <div class="card">
+              <div class="card-title"><span>Креатив и описание</span></div>
+
+              <div id="mediaDropzone" class="dropzone" onclick="document.getElementById('mediaInput').click()">
+                <div style="font-weight:600;margin-bottom:3px;">Перетащите фото или видео MP4</div>
+                <div class="muted" style="font-size:12px;">или нажмите для выбора файлов с диска</div>
+                <input id="mediaInput" type="file" multiple accept="image/*,video/mp4" class="hidden" onchange="handleMediaFiles(this.files)" />
+              </div>
+              <div id="mediaThumbs" class="thumbs"></div>
+
+              <div class="field" style="margin-top:12px;">
+                <label>Или выбрать из библиотеки сервера (<span class="mono" id="upLibCnt">0</span>)</label>
+                <div id="upLibThumbs" class="thumbs"></div>
+              </div>
+
+              <div class="field" style="margin-top:12px;">
+                <label>Описание и теги (spintax {a|b})</label>
+                <textarea id="upDesc">#piratetoken #piratetokenshop #blackknight #pirateshop #fyp</textarea>
+              </div>
+
+              <div class="row-3">
+                <div class="field"><label>Копий на акк</label><input type="number" id="upCopies" value="6" min="1" max="12" /></div>
+                <div class="field"><label>Потоки</label><input type="number" id="upThreads" value="5" min="1" max="10" /></div>
+                <div class="field">
+                  <label>Уникализатор</label>
+                  <select id="upPhotoMode">
+                    <option value="anti_unoriginal" selected>anti_unoriginal</option>
+                    <option value="minimal_snow">minimal_snow</option>
+                    <option value="stealth">stealth</option>
+                    <option value="boosted">boosted</option>
+                    <option value="clean_crop">clean_crop</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="row-2">
+                <div class="field"><label>Музыка</label><input type="text" id="upMusic" value="Fortnite" /></div>
+                <div class="field"><label>Регион</label><input type="text" id="upRegion" value="US" /></div>
+              </div>
+
+              <div style="display:flex;gap:14px;flex-wrap:wrap;margin:6px 0 4px;">
+                <label class="chk-row"><input type="checkbox" class="chk" id="upDelOld" checked /> Очистить старые посты</label>
+                <label class="chk-row"><input type="checkbox" class="chk" id="upAutoAppeal" checked /> Авто-снятие 2048</label>
+                <label class="chk-row"><input type="checkbox" class="chk" id="upDeferUnban" checked /> Дожим в отдельных потоках</label>
+                <label class="chk-row"><input type="checkbox" class="chk" id="upRandTags" checked /> Перемешать теги</label>
+              </div>
+
+              <details class="adv">
+                <summary>Дополнительные параметры залива</summary>
+                <div class="adv-body">
+                  <div class="row-3" style="margin-top:8px;">
+                    <div class="field"><label>Пауза от (с)</label><input type="number" id="upDelayMin" value="14" /></div>
+                    <div class="field"><label>Пауза до (с)</label><input type="number" id="upDelayMax" value="20" /></div>
+                    <div class="field"><label>Рестарт ТТ каждые</label><input type="number" id="upRestartN" value="3" /></div>
+                  </div>
+                  <div class="row-2">
+                    <div class="field"><label>Потоков дожима 2048</label><input type="number" id="upQueueThreads" value="3" min="1" max="10" /></div>
+                    <div class="field"><label>Авто-повтор через (мин)</label><input type="number" id="upDelayedRecheck" value="12" min="0" max="60" /></div>
+                  </div>
+                  <label class="chk-row"><input type="checkbox" class="chk" id="upStickyProxy" /> Закрепить sticky-прокси на время залива</label>
+                  <div style="margin-top:10px;">
+                    <button class="btn btn-sm" onclick="previewUniquifier()">👁 Превью уникализатора</button>
+                    <div id="uniqPreviewBox" class="row-2 hidden" style="margin-top:10px;"></div>
+                  </div>
+                </div>
+              </details>
+
+              <div style="display:flex;gap:8px;margin-top:12px;">
+                <button class="btn btn-primary" style="flex:1;" id="btnRunCampaign" onclick="submitCampaign()">🚀 Запустить залив</button>
+                <button class="btn" id="btnQuick1" onclick="submitSingleUpload()">Быстро 1 пост</button>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-title">
+                <span>Аккаунты <span class="mono muted" style="font-weight:400;" id="upPickStat"></span></span>
+                <div style="display:flex;gap:4px;">
+                  <button class="btn btn-xs" onclick="pickUploadSet('clean')">Чистые</button>
+                  <button class="btn btn-xs" onclick="pickUploadSet('all')">Все</button>
+                  <button class="btn btn-xs btn-ghost" onclick="pickUploadSet('none')">Сброс</button>
+                </div>
+              </div>
+              <input type="text" id="upAccFilter" placeholder="Фильтр аккаунтов..." oninput="renderUploadPicker()" style="margin-bottom:8px;" />
+              <div id="uploadPickList" class="pick-list" style="max-height:480px;"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ═══════════════════════════════════════════════════════════
+             VIEW 4: UNBAN 2048 QUEUE
+             ═══════════════════════════════════════════════════════════ -->
+        <section id="view-unban" class="hidden">
+          <div class="grid-2">
+            <div class="card">
+              <div class="card-title">
+                <span>Очередь снятия огранов 2048</span>
+                <span class="badge b-dim mono" id="unbanStatusBadge">Ожидание</span>
+              </div>
+
+              <div class="row-2">
+                <div class="field">
+                  <label>Какие аккаунты</label>
+                  <select id="unbanScope">
+                    <option value="restricted" selected>С ограном / на проверке</option>
+                    <option value="uploaded">Недавно пролитые</option>
+                    <option value="selected">Выбранные справа</option>
+                    <option value="all">Все авторизованные</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>Потоки</label>
+                  <input type="number" id="unbanThreads" value="3" min="1" max="10" />
+                </div>
+              </div>
+
+              <div class="row-2">
+                <div class="field"><label>Ждать тишину (сек)</label><input type="number" id="unbanQuiet" value="60" min="0" max="240" /></div>
+                <div class="field"><label>Авто-повтор через (мин)</label><input type="number" id="unbanRecheckMin" value="12" min="0" max="60" /></div>
+              </div>
+
+              <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:14px;">
+                <label class="chk-row"><input type="checkbox" class="chk" id="unbanSettle" checked /> Дожидаться все волны 2048</label>
+                <label class="chk-row"><input type="checkbox" class="chk" id="unbanOnly2048" checked /> Только системные 2048</label>
+              </div>
+
+              <div style="display:flex;gap:8px;margin-bottom:14px;">
+                <button class="btn btn-primary" style="flex:1;" onclick="startUnbanQueue()">▶ Запустить очередь</button>
+                <button class="btn btn-err" onclick="stopUnbanQueue()">⏹ Стоп</button>
+              </div>
+
+              <div class="sec-box">
+                <div class="sec-head">
+                  <span>Копировать по папкам</span>
+                </div>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                  <button class="btn btn-sm btn-ok" onclick="copyAccounts('clean', 'lines')">📋 Чистые</button>
+                  <button class="btn btn-sm btn-warn" onclick="copyAccounts('ogran_na_proverke', 'lines')">📋 На проверке</button>
+                  <button class="btn btn-sm btn-err" onclick="copyAccounts('ogran_ne_snyat', 'lines')">📋 Не снят</button>
+                  <button class="btn btn-sm" onclick="copyAccounts('uploaded', 'lines')">📋 Пролитые</button>
+                </div>
+              </div>
+
+              <div id="unbanQueueBox" style="margin-top:12px;"></div>
+            </div>
+
+            <div class="card">
+              <div class="card-title">
+                <span>Выбор аккаунтов</span>
+                <button class="btn btn-xs" onclick="toggleAllUnbanPick()">Все / Сброс</button>
+              </div>
+              <div id="unbanPickList" class="pick-list" style="max-height:500px;"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ═══════════════════════════════════════════════════════════
+             VIEW 5: IMPORT
+             ═══════════════════════════════════════════════════════════ -->
+        <section id="view-import" class="hidden">
+          <div class="grid-2">
+            <div class="card">
+              <div class="card-title">
+                <span>Пакетный импорт аккаунтов</span>
+                <label class="btn btn-xs" style="cursor:pointer;">
+                  📂 .txt файл
+                  <input type="file" accept=".txt" class="hidden" onchange="loadTxtFile(event)" />
+                </label>
+              </div>
+              <div class="field">
+                <label>Строки аккаунтов (login:pass:outlook:... или user|pass|email|totp)</label>
+                <textarea id="impLines" style="min-height:150px;" class="mono" placeholder="user123:pass:mail@outlook.com:mpass:rec@mail.com:rpass:TOTP" oninput="scheduleLinePreview()"></textarea>
+              </div>
+              <div class="row-2">
+                <div class="field">
+                  <label>Прокси (по строкам, пусто = дефолт)</label>
+                  <textarea id="impProxies" style="min-height:66px;" class="mono" placeholder="socks5://user:pass@host:port" oninput="scheduleLinePreview()"></textarea>
+                </div>
+                <div class="field">
+                  <label>Регион</label>
+                  <input type="text" id="impRegion" value="US" />
+                  <div class="muted" style="font-size:11px;margin-top:6px;">Дефолт: <span class="mono" id="defProxyHint">—</span></div>
+                </div>
+              </div>
+
+              <div style="display:flex;gap:14px;flex-wrap:wrap;margin:6px 0 14px;">
+                <label class="chk-row"><input type="checkbox" class="chk" id="impAutoLogin" checked /> Авто-вход</label>
+                <label class="chk-row"><input type="checkbox" class="chk" id="impAutoAppeal" checked /> Авто-снятие огранов</label>
+                <label class="chk-row"><input type="checkbox" class="chk" id="impAutoClean" /> Очистить старые посты</label>
+              </div>
+
+              <button class="btn btn-primary" style="width:100%;" onclick="submitBatchImport()">📥 Импортировать и запустить (5 пот.)</button>
+
+              <details class="adv" style="margin-top:14px;">
+                <summary>Импорт из папки сессий JSON</summary>
+                <div class="adv-body" style="padding-top:10px;display:flex;gap:8px;">
+                  <input type="text" id="folderPathInput" placeholder="/путь/к/папке/sessions" />
                   <button class="btn btn-sm" onclick="submitFolderImport()">Импорт</button>
                 </div>
+              </details>
+            </div>
+
+            <div class="card">
+              <div class="card-title">
+                <span>Предпросмотр строк</span>
+                <span class="badge b-sage mono" id="previewBadge">0</span>
               </div>
-            </details>
-          </div>
-        </div>
-      </section>
-
-      <!-- VIEW 5: TOOLS & SETTINGS (COMPACT SUB-TABS) -->
-      <section id="view-tools" class="hidden">
-        <div class="pills" style="margin-bottom:14px;">
-          <button class="pill active" onclick="switchSubTool('shadow', this)">👁 Чекер теней</button>
-          <button class="pill" onclick="switchSubTool('proxy', this)">🌐 Прокси</button>
-          <button class="pill" onclick="switchSubTool('config', this)">⚙️ Настройки</button>
-          <button class="pill" onclick="switchSubTool('utils', this)">🕵️ Шпион & 2FA</button>
-        </div>
-
-        <!-- SUB 1: CLEAN EXPORT / DUMP & SHADOW CHECKER -->
-        <div id="sub-shadow" class="card">
-          <div class="card-head">
-            <div class="card-title">📤 Выгрузка постов и чекер тени</div>
-            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-              <select id="shScope" style="width:auto;padding:5px 9px;font-size:12px;">
-                <option value="uploaded" selected>Только пролитые</option>
-                <option value="all">Все аккаунты</option>
-              </select>
-              <select id="shThreads" style="width:auto;padding:5px 8px;font-size:12px;" title="Потоки проверки">
-                <option value="1">1 пот.</option>
-                <option value="3">3 пот.</option>
-                <option value="5" selected>5 пот.</option>
-                <option value="8">8 пот.</option>
-                <option value="10">10 пот.</option>
-              </select>
-              <label style="font-size:11.5px;display:flex;align-items:center;gap:4px;cursor:pointer;" title="Проверять также Studio UNORIGINAL_NR и Account Updates 2048 для своих аккаунтов">
-                <input type="checkbox" id="shDeepAudit" checked class="chk" /> Studio + 2048
-              </label>
-              <button class="btn btn-sm btn-primary" id="btnRunShadow" onclick="runShadowChecker()">▶ Выгрузить</button>
+              <div id="previewBox" class="muted" style="font-size:12.5px;">Вставьте строки аккаунтов слева для проверки формата.</div>
             </div>
           </div>
-          <div class="field">
-            <textarea id="shCustomUsers" style="min-height:54px;" placeholder="Оставь пустым для своих аккаунтов, либо вставь чужие @username / ссылки построчно..."></textarea>
-          </div>
-          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;">
-            <button class="btn btn-xs btn-ok" onclick="copyShadowDump('telegram')">📨 Выгрузка (как KURDY)</button>
-            <button class="btn btn-xs" onclick="copyShadowDump('usernames')">📋 @Юзернеймы</button>
-            <button class="btn btn-xs" onclick="copyShadowDump('lines')">📋 Строки (login:pass:...)</button>
-            <button class="btn btn-xs" onclick="copyShadowDump('urls')">🔗 Ссылки постов</button>
-            <button class="btn btn-xs btn-ok" onclick="copyShadowDump('clean_lines')">✅ Только без тени</button>
-          </div>
-          <div id="shadowResultsBox" class="muted" style="font-size:12.5px;">Нажми «▶ Выгрузить» — покажу просмотры, публичные посты, гео и статус тени без лишнего шума.</div>
-        </div>
+        </section>
 
-        <!-- SUB 2: PROXY TESTER -->
-        <div id="sub-proxy" class="card hidden">
-          <div class="card-head">
-            <div class="card-title">Тестер прокси (Exit IP · GEO · пинг)</div>
-            <button class="btn btn-sm btn-primary" id="btnTestProxies" onclick="runProxyTest()">Проверить</button>
+        <!-- ═══════════════════════════════════════════════════════════
+             VIEW 6: TOOLS & SETTINGS
+             ═══════════════════════════════════════════════════════════ -->
+        <section id="view-tools" class="hidden">
+          <div class="pills" style="margin-bottom:16px;">
+            <button class="pill active" onclick="switchSubTool('shadow', this)">Выгрузка / Тень</button>
+            <button class="pill" onclick="switchSubTool('proxy', this)">Прокси-чекер</button>
+            <button class="pill" onclick="switchSubTool('config', this)">Настройки</button>
+            <button class="pill" onclick="switchSubTool('utils', this)">Spy &amp; TOTP</button>
           </div>
-          <div class="field">
-            <textarea id="proxyTestInput" placeholder="socks5://user:pass@host:port&#10;ip:port:user:pass"></textarea>
-          </div>
-          <div id="proxyTestResults"></div>
-        </div>
 
-        <!-- SUB 3: CONFIG -->
-        <div id="sub-config" class="card hidden" style="max-width:640px;">
-          <div class="card-head">
-            <div class="card-title">Настройки <code class="mono">config.toml</code></div>
-            <span class="badge b-dim mono" id="cfgKeyBadge">—</span>
-          </div>
-          <div class="field">
-            <label>Kintaro API Key (оставь пустым, чтобы не менять)</label>
-            <input type="password" id="cfgApiKey" placeholder="••••••••" />
-          </div>
-          <div class="row-2">
-            <div class="field"><label>Параллельных акков</label><input type="number" id="cfgParallel" min="1" max="16" value="2" /></div>
-            <div class="field"><label>Постов/день макс.</label><input type="number" id="cfgDailyMax" min="1" max="50" value="3" /></div>
-          </div>
-          <div class="row-2">
-            <div class="field"><label>Отлёжка сессии (мин)</label><input type="number" id="cfgAgeMin" min="0" step="5" value="60" /></div>
-            <div class="field"><label>Пауза между постами (ч)</label><input type="number" id="cfgGapHours" min="0" step="0.5" value="3" /></div>
-          </div>
-          <label class="toggle-row"><span>Автопрогрев ленты</span><input type="checkbox" id="cfgWarmupOn" class="chk" /></label>
-          <label class="toggle-row"><span>Уникализатор FFmpeg / Pillow</span><input type="checkbox" id="cfgUniqOn" class="chk" /></label>
-          <button class="btn btn-primary" style="margin-top:6px;" onclick="saveConfig()">💾 Сохранить</button>
-        </div>
-
-        <!-- SUB 4: SPY & TOTP -->
-        <div id="sub-utils" class="grid-eq hidden">
-          <div class="card">
-            <div class="card-head"><div class="card-title">🕵️ Шпион конкурента</div></div>
-            <div style="display:flex;gap:8px;margin-bottom:10px;">
-              <input type="text" id="spyUserInput" placeholder="@username конкурента" />
-              <button class="btn btn-sm btn-primary" id="btnSpy" onclick="runSpy()">Сканировать</button>
+          <!-- Sub 1: Clean Dump & Shadow Checker -->
+          <div id="sub-shadow" class="card">
+            <div class="card-title">
+              <span>Выгрузка постов и проверка тени</span>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                <button class="btn btn-xs" onclick="copyShadowDump('telegram')">📨 Выгрузка TG</button>
+                <button class="btn btn-xs" onclick="copyShadowDump('lines')">📋 Строки</button>
+                <button class="btn btn-xs" onclick="copyShadowDump('clean_lines')">✓ Чистые</button>
+                <button class="btn btn-xs" onclick="copyShadowDump('urls')">🔗 Ссылки</button>
+              </div>
             </div>
-            <div id="spyResultBox" class="muted" style="font-size:12.5px;">Охваты, топ хэштеги и Music ID конкурента.</div>
-          </div>
-          <div class="card">
-            <div class="card-head"><div class="card-title">🔐 2FA TOTP генератор</div></div>
-            <div style="display:flex;gap:8px;margin-bottom:10px;">
-              <input type="text" id="totpSecretInput" placeholder="Base32 секрет..." />
-              <button class="btn btn-sm btn-ok" onclick="genTotp()">Код</button>
+            <div class="row-3">
+              <div class="field">
+                <label>Откуда брать</label>
+                <select id="shScope">
+                  <option value="uploaded" selected>Пролитые аккаунты</option>
+                  <option value="all">Все аккаунты базы</option>
+                  <option value="manual">Свой список @username</option>
+                </select>
+              </div>
+              <div class="field"><label>Потоки</label><input type="number" id="shThreads" value="5" min="1" max="15" /></div>
+              <div class="field" style="display:flex;align-items:flex-end;gap:8px;">
+                <label class="chk-row" style="margin-bottom:8px;"><input type="checkbox" class="chk" id="shDeepAudit" checked /> Глубокий (2048 + Studio)</label>
+              </div>
             </div>
-            <div id="totpResultBox" class="mono" style="font-size:20px;font-weight:700;color:var(--cyan);">—</div>
+            <div class="field">
+              <label>Свой список @username (если выбран ручной режим)</label>
+              <textarea id="shCustomUsers" style="min-height:54px;" placeholder="@user1&#10;@user2"></textarea>
+            </div>
+            <button class="btn btn-primary" id="btnRunShadow" onclick="runShadowChecker()">▶ Выгрузить и проверить</button>
+            <div id="shadowResultsBox" style="margin-top:14px;"></div>
           </div>
-        </div>
-      </section>
+
+          <!-- Sub 2: Proxy Checker -->
+          <div id="sub-proxy" class="card hidden">
+            <div class="card-title"><span>Проверка прокси (GEO / IP / Пинг)</span></div>
+            <div class="field">
+              <textarea id="proxyTestInput" style="min-height:110px;" class="mono" placeholder="socks5://user:pass@host:port"></textarea>
+            </div>
+            <button class="btn btn-primary" id="btnTestProxies" onclick="runProxyTest()">Проверить прокси</button>
+            <div id="proxyTestResults" style="margin-top:14px;"></div>
+          </div>
+
+          <!-- Sub 3: Config -->
+          <div id="sub-config" class="card hidden">
+            <div class="card-title">
+              <span>Настройки config.toml</span>
+              <span class="badge b-sage mono" id="cfgKeyBadge">—</span>
+            </div>
+            <div class="field"><label>Kintaro API Key (оставьте пустым, чтобы не менять)</label><input type="password" id="cfgApiKey" placeholder="новый ключ..." /></div>
+            <div class="row-2">
+              <div class="field"><label>Параллельных аккаунтов</label><input type="number" id="cfgParallel" value="5" /></div>
+              <div class="field"><label>Макс. постов/сутки</label><input type="number" id="cfgDailyMax" value="6" /></div>
+            </div>
+            <div class="row-2">
+              <div class="field"><label>Отлёжка новой сессии (мин)</label><input type="number" id="cfgAgeMin" value="0" /></div>
+              <div class="field"><label>Пауза между постами (часов)</label><input type="number" id="cfgGapHours" value="0" step="0.5" /></div>
+            </div>
+            <div style="display:flex;gap:16px;margin:8px 0 14px;">
+              <label class="chk-row"><input type="checkbox" class="chk" id="cfgWarmupOn" /> Прогрев перед заливом</label>
+              <label class="chk-row"><input type="checkbox" class="chk" id="cfgUniqOn" checked /> Уникализатор</label>
+            </div>
+            <button class="btn btn-primary" onclick="saveConfig()">Сохранить настройки</button>
+          </div>
+
+          <!-- Sub 4: Spy & TOTP -->
+          <div id="sub-utils" class="grid-2 hidden">
+            <div class="card">
+              <div class="card-title"><span>Spy конкурента</span></div>
+              <div style="display:flex;gap:8px;margin-bottom:10px;">
+                <input type="text" id="spyUserInput" placeholder="@competitor" />
+                <button class="btn btn-primary" id="btnSpy" onclick="runSpy()">Анализ</button>
+              </div>
+              <div id="spyResultBox" class="muted" style="font-size:12.5px;">Введите @username для просмотра средних просмотров и топ-тегов.</div>
+            </div>
+
+            <div class="card">
+              <div class="card-title"><span>2FA TOTP генератор</span></div>
+              <div style="display:flex;gap:8px;margin-bottom:10px;">
+                <input type="text" id="totpSecretInput" class="mono" placeholder="BASE32 SECRET..." />
+                <button class="btn btn-primary" onclick="genTotp()">Код</button>
+              </div>
+              <div id="totpResultBox" class="mono" style="font-size:20px;font-weight:700;color:var(--sage);">—</div>
+            </div>
+          </div>
+        </section>
+
+      </div>
     </main>
+
+    <!-- MINIMALIST BOTTOM SSE LOG DOCK -->
+    <div id="logDock" class="log-dock collapsed">
+      <div class="log-bar" onclick="document.getElementById('logDock').classList.toggle('collapsed')">
+        <span class="sse-pill">• SSE</span>
+        <div class="log-preview mono" id="logPreview">Подключение к живым событиям...</div>
+        <span class="muted" style="font-size:11.5px;">Логи ▴</span>
+      </div>
+      <div id="logBody" class="log-body mono"></div>
+    </div>
   </div>
 </div>
 
-<!-- FLOATING MULTI-SELECT BAR -->
-<div id="bulkBar" class="bulk-bar hidden">
-  <strong style="font-size:12.5px;margin-right:4px;">Выбрано: <span id="bulkCount" class="mono">0</span></strong>
-  <button class="btn btn-xs btn-ok" onclick="copySelected()">📋 Копировать</button>
-  <button class="btn btn-xs btn-primary" onclick="runBulk('auth')">🔑 Войти</button>
-  <button class="btn btn-xs" onclick="runBulk('audit')">↻ Аудит</button>
-  <button class="btn btn-xs btn-ok" onclick="runBulk('appeal')">⚡ Ограны</button>
-  <button class="btn btn-xs btn-warn" onclick="runBulk('clean_posts')">🗑 Посты</button>
-  <button class="btn btn-xs" onclick="runBulk('sync_geo')">🌎 US</button>
-  <button class="btn btn-xs" onclick="promptBulkProxy()">🌐 Прокси</button>
-  <button class="btn btn-xs btn-err" onclick="runBulk('delete')">Удалить</button>
-  <button class="btn btn-xs btn-ghost" onclick="clearSelection()">✕</button>
-</div>
-
-<!-- SLIDE-OVER ACCOUNT INSPECTOR -->
-<div id="drawerBg" class="drawer-bg hidden" onclick="if(event.target===this) closeDrawer()">
+<!-- SLIDE-OVER ACCOUNT INSPECTOR DRAWER -->
+<div id="drawerBg" class="drawer-bg hidden" onclick="if (event.target === this) closeDrawer()">
   <div class="drawer">
     <div class="drawer-head">
       <div id="drawerHeadInfo"></div>
-      <button class="btn btn-sm btn-ghost" onclick="closeDrawer()">✕</button>
+      <button class="btn btn-icon btn-ghost" onclick="closeDrawer()">✕</button>
     </div>
     <div id="drawerBody" class="drawer-body"></div>
   </div>
 </div>
-
-<!-- COLLAPSED-BY-DEFAULT LIVE LOG BAR -->
-<footer id="logDock" class="log-dock collapsed">
-  <div class="log-bar" onclick="document.getElementById('logDock').classList.toggle('collapsed')">
-    <span style="display:flex;align-items:center;gap:7px;font-weight:600;">
-      <span class="dot on"></span>
-      <span>ЛОГИ</span>
-    </span>
-    <span id="logPreview" class="log-preview mono">Подключено</span>
-    <span class="mono" style="font-size:11px;">▲▼</span>
-  </div>
-  <div id="logBody" class="log-body"></div>
-</footer>
 
 <div id="toasts" class="toasts"></div>
 

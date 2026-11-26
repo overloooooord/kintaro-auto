@@ -512,32 +512,39 @@ async def audit_account_restrictions(
         avatar_url = ""
         reg_country = ""
         current_region = ""
-        try:
-            r_user = await http.get(
-                f"{WWW_BASE}/tiktokstudio/api/web/user",
-                params={"needIsVerified": "true", "needProfileBio": "true"},
-            )
-            if r_user.status_code == 200:
-                u_data = r_user.json()
-                uid = str(u_data.get("userId") or "")
-                ub = (
-                    (u_data.get("userBaseInfo") or {})
-                    .get("UserProfile", {})
-                    .get("UserBase", {})
+        studio_user_ok = False
+        last_net_err = ""
+        for _attempt in range(2):
+            try:
+                r_user = await http.get(
+                    f"{WWW_BASE}/tiktokstudio/api/web/user",
+                    params={"needIsVerified": "true", "needProfileBio": "true"},
                 )
-                uniq_id = str(ub.get("UniqId") or "")
-                nickname = str(ub.get("NickName") or "")
-                av_obj = ub.get("Avatars") or {}
-                url_list = av_obj.get("UrlList") if isinstance(av_obj, dict) else None
-                if isinstance(url_list, list) and url_list:
-                    avatar_url = str(url_list[0])
-                reg_info = ub.get("Region") or {}
-                reg_country = str(reg_info.get("RegistrationCountry") or "").upper()
-                current_region = str(reg_info.get("Region") or "").upper()
-                if uniq_id and account.username != uniq_id:
-                    account.username = uniq_id
-        except Exception:
-            pass
+                if r_user.status_code == 200:
+                    studio_user_ok = True
+                    u_data = r_user.json()
+                    uid = str(u_data.get("userId") or "")
+                    ub = (
+                        (u_data.get("userBaseInfo") or {})
+                        .get("UserProfile", {})
+                        .get("UserBase", {})
+                    )
+                    uniq_id = str(ub.get("UniqId") or "")
+                    nickname = str(ub.get("NickName") or "")
+                    av_obj = ub.get("Avatars") or {}
+                    url_list = av_obj.get("UrlList") if isinstance(av_obj, dict) else None
+                    if isinstance(url_list, list) and url_list:
+                        avatar_url = str(url_list[0])
+                    reg_info = ub.get("Region") or {}
+                    reg_country = str(reg_info.get("RegistrationCountry") or "").upper()
+                    current_region = str(reg_info.get("Region") or "").upper()
+                    if uniq_id and account.username != uniq_id:
+                        account.username = uniq_id
+                    break
+            except Exception as exc:
+                last_net_err = f"{type(exc).__name__}: {exc}"
+                if _attempt == 0:
+                    await asyncio.sleep(1.2)
 
         idc_gw = await _resolve_idc_gateway(cookies, http)
         audit = AccountAuditResult(
@@ -567,10 +574,11 @@ async def audit_account_restrictions(
                         if flt.get("filter_type") in (33, 51):
                             for g in flt.get("groups") or []:
                                 groups.add(int(g))
-            except Exception:
-                pass
+            except Exception as exc:
+                last_net_err = f"{type(exc).__name__}: {exc}"
 
         raw_notices: list[tuple[int, dict[str, Any]]] = []
+        notice_http_ok = False
         sorted_groups = sorted(groups)
         for i in range(0, len(sorted_groups), 20):
             chunk = sorted_groups[i : i + 20]
@@ -578,19 +586,34 @@ async def audit_account_restrictions(
                 [{"count": 50, "group": g, "is_mark_read": 0, "max_time": 0, "min_time": 0} for g in chunk],
                 separators=(",", ":"),
             )
-            try:
-                r_multi = await http.get(
-                    f"{idc_gw}/aweme/v1/notice/multi/",
-                    params={**MOBILE_BASE_PARAMS, "group_list": group_list},
-                )
-                if r_multi.status_code == 200:
-                    for nl in r_multi.json().get("notice_lists") or []:
-                        g_id = int(nl.get("group") or 0)
-                        for item in nl.get("notice_list") or []:
-                            if isinstance(item, dict):
-                                raw_notices.append((g_id, item))
-            except Exception:
-                continue
+            for _attempt in range(2):
+                try:
+                    r_multi = await http.get(
+                        f"{idc_gw}/aweme/v1/notice/multi/",
+                        params={**MOBILE_BASE_PARAMS, "group_list": group_list},
+                    )
+                    if r_multi.status_code == 200:
+                        notice_http_ok = True
+                        for nl in r_multi.json().get("notice_lists") or []:
+                            g_id = int(nl.get("group") or 0)
+                            for item in nl.get("notice_list") or []:
+                                if isinstance(item, dict):
+                                    raw_notices.append((g_id, item))
+                        break
+                    last_net_err = f"IDC notice/multi HTTP {r_multi.status_code}"
+                except Exception as exc:
+                    last_net_err = f"{type(exc).__name__}: {exc}"
+                if _attempt == 0:
+                    await asyncio.sleep(1.2)
+
+        if not notice_http_ok and not studio_user_ok:
+            raise RuntimeError(
+                f"Сбой прокси/сети при HTTP-аудите ({last_net_err or 'нет ответа от TikTok IDC/Studio'})"
+            )
+        if not notice_http_ok:
+            raise RuntimeError(
+                f"Не удалось получить системные уведомления IDC ({last_net_err or 'HTTP != 200'}) — статус не перезаписан"
+            )
 
         raw_notices.sort(
             key=lambda pair: int(

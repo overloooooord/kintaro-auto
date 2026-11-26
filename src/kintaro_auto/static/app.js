@@ -1,4 +1,11 @@
-let STATE = { accounts: [], active_jobs: [], watchdog: { enabled: false }, unban_queue: null, logs: [] };
+let STATE = {
+  accounts: [],
+  active_jobs: [],
+  watchdog: { enabled: false, cycles: 0, threads: 5 },
+  unban_queue: null,
+  goal_autopilot: null,
+  logs: [],
+};
 let ACTIVE_VIEW = 'accounts';
 let ACTIVE_FILTER = 'all';
 let DRAWER_ID = null;
@@ -6,9 +13,54 @@ let DRAWER_ID = null;
 const SELECTED = new Set();
 const UP_PICK = new Set();
 const UNBAN_PICK = new Set();
+const AP_MEDIA_PICK = new Set();
+const UP_LIB_PICK = new Set();
+let MEDIA_LIBRARY = [];
 let UP_FILES = [];
 let LAST_SHADOW_ROWS = [];
 let previewTimer = null;
+
+const VIEW_META = {
+  accounts: {
+    title: 'Аккаунты',
+    sub: 'Здоровье профилей, входы и массовые действия — в одном спокойном месте.',
+  },
+  autopilot: {
+    title: 'Автопилот 600',
+    sub: 'Автономный залив, снятие волн 2048, мониторинг за $0 и умный долив до цели.',
+  },
+  upload: {
+    title: 'Залив',
+    sub: 'Кампании с уникализацией, рандомизацией тегов, музыкой и холодным рестартом.',
+  },
+  unban: {
+    title: 'Ограны 2048',
+    sub: 'Многопоточная очередь дожима волн ограничений и сортировка по папкам.',
+  },
+  import: {
+    title: 'Импорт',
+    sub: 'Пакетное добавление аккаунтов с авто-входом и проверкой прокси.',
+  },
+  tools: {
+    title: 'Инструменты',
+    sub: 'Выгрузка постов и проверка тени, прокси-чекер, настройки и утилиты.',
+  },
+};
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+function fmtDur(sec) {
+  const s = Math.max(0, Math.floor(Number(sec || 0)));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const r = s % 60;
+  const p = n => String(n).padStart(2, '0');
+  return h > 0 ? `${p(h)}:${p(m)}:${p(r)}` : `${p(m)}:${p(r)}`;
+}
 
 async function copyText(str, okMsg = 'Скопировано') {
   const val = String(str ?? '');
@@ -35,25 +87,17 @@ async function copyText(str, okMsg = 'Скопировано') {
   return false;
 }
 
-const VIEW_TITLES = {
-  accounts: 'Аккаунты',
-  upload: 'Залив',
-  unban: 'Снятие огранов 2048',
-  import: 'Импорт аккаунтов',
-  tools: 'Инструменты и настройки',
-};
-
-function esc(s) {
-  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
-
 function toast(msg, type = 'info') {
   const stack = document.getElementById('toasts');
   const el = document.createElement('div');
   el.className = 'toast ' + (type === 'success' ? 'ok' : type);
   el.textContent = msg;
   stack.appendChild(el);
-  setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .2s'; setTimeout(() => el.remove(), 220); }, 3600);
+  setTimeout(() => {
+    el.style.opacity = '0';
+    el.style.transition = 'opacity .2s';
+    setTimeout(() => el.remove(), 220);
+  }, 3600);
 }
 
 async function apiJson(url, opts = {}) {
@@ -71,19 +115,44 @@ async function apiPost(url, body = {}) {
   });
 }
 
+// ── Theme Toggle (Soft Light default + Optional Warm Dark) ───
+function applyTheme(theme) {
+  const dark = theme === 'dark';
+  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+  const btn = document.getElementById('btnTheme');
+  if (btn) btn.textContent = dark ? '☀️' : '🌙';
+}
+function toggleTheme() {
+  const cur = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+  const next = cur === 'dark' ? 'light' : 'dark';
+  localStorage.setItem('kintaro_theme', next);
+  applyTheme(next);
+}
+
 // ── Navigation ───────────────────────────────────────────────
 function switchView(name) {
   ACTIVE_VIEW = name;
-  Object.keys(VIEW_TITLES).forEach(v => {
+  Object.keys(VIEW_META).forEach(v => {
     document.getElementById('view-' + v).classList.toggle('hidden', v !== name);
   });
   document.querySelectorAll('.nav-item').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.view === name);
   });
-  document.getElementById('topTitle').textContent = VIEW_TITLES[name] || '';
-  if (name === 'upload') renderUploadPicker();
+  const meta = VIEW_META[name] || VIEW_META.accounts;
+  document.getElementById('topTitle').textContent = meta.title;
+  document.getElementById('heroTitle').textContent = meta.title;
+  document.getElementById('heroSub').textContent = meta.sub;
+
+  if (name === 'autopilot') { loadMediaLibrary(); renderAutopilotView(); }
+  if (name === 'upload') { loadMediaLibrary(); renderUploadPicker(); }
   if (name === 'unban') renderUnbanView();
   if (name === 'tools') { loadConfig(); loadLastShadow(); }
+}
+
+function openSettingsQuick() {
+  switchView('tools');
+  const cfgBtn = document.querySelector('#view-tools .pill:nth-child(3)');
+  if (cfgBtn) switchSubTool('config', cfgBtn);
 }
 
 function switchSubTool(name, btn) {
@@ -99,22 +168,35 @@ function switchSubTool(name, btn) {
 function setFilter(f, btn) {
   ACTIVE_FILTER = f;
   document.querySelectorAll('#view-accounts .pill').forEach(p => p.classList.toggle('active', p.dataset.f === f));
+  document.querySelectorAll('#view-accounts .kpi-card').forEach(k => k.classList.toggle('active', k.dataset.kpi === f));
   renderAccounts();
 }
 
 function jumpFilter(f) {
   switchView('accounts');
-  ACTIVE_FILTER = f === 'authed' ? 'all' : f;
-  document.querySelectorAll('#view-accounts .pill').forEach(p => p.classList.toggle('active', p.dataset.f === ACTIVE_FILTER));
+  ACTIVE_FILTER = f === 'authed' ? 'authed' : f;
+  const pillKey = ACTIVE_FILTER === 'authed' ? 'all' : ACTIVE_FILTER;
+  document.querySelectorAll('#view-accounts .pill').forEach(p => p.classList.toggle('active', p.dataset.f === pillKey));
+  document.querySelectorAll('#view-accounts .kpi-card').forEach(k => k.classList.toggle('active', k.dataset.kpi === f));
   renderAccounts();
+}
+
+async function syncNow() {
+  await Promise.all([fetchState(), loadMediaLibrary()]);
+  toast('Состояние синхронизировано', 'success');
 }
 
 // ── State Sync ───────────────────────────────────────────────
 async function fetchState() {
   try {
     STATE = await apiJson('/api/state');
+    document.getElementById('connDot').className = 'dot on';
+    document.getElementById('connBadge').textContent = 'LIVE';
     renderAll();
-  } catch (_) {}
+  } catch (_) {
+    document.getElementById('connDot').className = 'dot warn';
+    document.getElementById('connBadge').textContent = 'ОФЛАЙН';
+  }
 }
 
 function statusBadge(a) {
@@ -143,6 +225,20 @@ function renderAll() {
   ogPill.textContent = act;
   ogPill.classList.toggle('hidden', act === 0);
 
+  // Autopilot sidebar badge
+  const ga = STATE.goal_autopilot || {};
+  const apPill = document.getElementById('navAutoPill');
+  if (ga.running) {
+    apPill.textContent = `LIVE · ${ga.counts?.goal_reached || 0}/${ga.counts?.total || 0}`;
+    apPill.className = 'nav-pill pulse mono';
+  } else if ((ga.counts?.goal_reached || 0) > 0) {
+    apPill.textContent = `${ga.counts.goal_reached} ✓`;
+    apPill.className = 'nav-pill sage mono';
+  } else {
+    apPill.textContent = String(ga.config?.target_views || 600);
+    apPill.className = 'nav-pill sage mono';
+  }
+
   document.getElementById('stTotal').textContent = accs.length;
   document.getElementById('stAuth').textContent = auth;
   document.getElementById('stClean').textContent = clean;
@@ -155,25 +251,38 @@ function renderAll() {
   // Job pill
   const jobs = STATE.active_jobs || [];
   const jp = document.getElementById('jobPill');
+  const jDot = document.getElementById('jobDot');
+  const jSpin = document.getElementById('jobSpin');
   if (jobs.length) {
     const j0 = jobs[0];
     document.getElementById('jobText').textContent = `${j0.label} (${j0.done}/${j0.total})`;
-    jp.classList.remove('hidden');
+    jp.classList.add('active');
+    jDot.classList.add('hidden');
+    jSpin.classList.remove('hidden');
+  } else if (ga.running) {
+    document.getElementById('jobText').textContent = `Автопилот · 600+: ${ga.counts?.goal_reached || 0}/${ga.counts?.total || 0}`;
+    jp.classList.add('active');
+    jDot.classList.add('hidden');
+    jSpin.classList.remove('hidden');
   } else {
-    jp.classList.add('hidden');
+    document.getElementById('jobText').textContent = 'Задач нет';
+    jp.classList.remove('active');
+    jDot.classList.remove('hidden');
+    jSpin.classList.add('hidden');
   }
 
-  // Watchdog
+  // Watchdog switch card
   const wd = STATE.watchdog || {};
-  document.getElementById('wdDot').className = 'dot' + (wd.enabled ? ' on' : '');
+  const wdSw = document.getElementById('wdSwitch');
   const wdLbl = document.getElementById('wdLabel');
+  wdSw.className = 'switch' + (wd.enabled ? ' on' : '');
   if (wd.enabled) {
     wdLbl.textContent = wd.next_in_sec != null
-      ? `ON · ${wd.next_in_sec}с`
-      : `ON · #${wd.cycles || 1}`;
+      ? `ON · цикл #${wd.cycles || 1} · ${wd.next_in_sec}с`
+      : `ON · опрос #${wd.cycles || 1} (${wd.threads || 5} пот.)`;
     wdLbl.style.color = 'var(--ok)';
   } else {
-    wdLbl.textContent = 'OFF';
+    wdLbl.textContent = `OFF · циклы ${wd.cycles || 0}`;
     wdLbl.style.color = 'var(--muted)';
   }
 
@@ -183,6 +292,7 @@ function renderAll() {
   updateBulkBar();
 
   renderAccounts();
+  if (ACTIVE_VIEW === 'autopilot') renderAutopilotView();
   if (ACTIVE_VIEW === 'upload') renderUploadPicker();
   if (ACTIVE_VIEW === 'unban') renderUnbanView();
   if (DRAWER_ID) {
@@ -198,7 +308,8 @@ function getVisibleAccounts() {
   return (STATE.accounts || [])
     .filter(a => {
       if (ACTIVE_FILTER === 'unauth' && a.authenticated) return false;
-      if (ACTIVE_FILTER !== 'all' && ACTIVE_FILTER !== 'unauth') {
+      if (ACTIVE_FILTER === 'authed' && !a.authenticated) return false;
+      if (!['all', 'unauth', 'authed'].includes(ACTIVE_FILTER)) {
         if (!a.authenticated || !a.audit || a.audit.account_health !== ACTIVE_FILTER) return false;
       }
       if (q) {
@@ -218,9 +329,13 @@ function getVisibleAccounts() {
 
 function renderAccounts() {
   const tbody = document.getElementById('accountsTbody');
+  const total = (STATE.accounts || []).length;
   const list = getVisibleAccounts();
+  const cntInfo = document.getElementById('tableCountInfo');
+  if (cntInfo) cntInfo.textContent = `Показано ${list.length} из ${total}`;
+
   if (!list.length) {
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:32px;color:var(--muted);">Нет аккаунтов по выбранному фильтру</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:38px;color:var(--muted);">Нет аккаунтов по выбранному фильтру</td></tr>';
     return;
   }
 
@@ -235,9 +350,11 @@ function renderAccounts() {
     const vioTag = vios
       ? `<span class="mono" style="font-size:11px;color:var(--err);margin-left:5px;">(${vios} орг.)</span>`
       : (failVios
-          ? `<span class="mono" style="font-size:11px;color:var(--err);margin-left:5px;" title="Апелляция отклонена TikTok">(${failVios} откл.)</span>`
-          : (revVios ? `<span class="mono" style="font-size:11px;color:var(--warn);margin-left:5px;" title="На рассмотрении TikTok">(${revVios})</span>` : ''));
-    const postsTxt = aud ? `${aud.total_posts} · <strong>${(aud.total_views || 0).toLocaleString()}</strong>` : '—';
+          ? `<span class="mono" style="font-size:11px;color:var(--err);margin-left:5px;" title="Отклонено TikTok">(${failVios} откл.)</span>`
+          : (revVios ? `<span class="mono" style="font-size:11px;color:var(--warn);margin-left:5px;" title="На проверке TikTok">(${revVios})</span>` : ''));
+    const postsTxt = aud
+      ? `<span>${aud.total_posts}</span> <span class="muted">·</span> <strong>${(aud.total_views || 0).toLocaleString()}</strong>`
+      : '<span class="muted">—</span>';
     const geoTxt = aud
       ? `${esc(aud.reg_country || '?')}→${esc(aud.current_region || '?')} · ${esc(aud.proxy_country || 'OK')}`
       : esc(a.region);
@@ -252,7 +369,7 @@ function renderAccounts() {
         <div>${statusBadge(a)}${vioTag}</div>
         ${audTime ? `<div class="mono muted" style="font-size:10.5px;margin-top:2px;">обн. ${esc(audTime)}</div>` : ''}
       </td>
-      <td class="mono" style="font-size:12px;">${postsTxt}</td>
+      <td class="mono" style="font-size:12.5px;">${postsTxt}</td>
       <td class="mono muted" style="font-size:11.5px;">${geoTxt}</td>
       <td style="text-align:right;white-space:nowrap;">
         ${!a.authenticated
@@ -281,6 +398,8 @@ function toggleSelectAll() {
 }
 function clearSelection() {
   SELECTED.clear();
+  const ca = document.getElementById('chkAll');
+  if (ca) ca.checked = false;
   updateBulkBar();
   renderAccounts();
 }
@@ -303,6 +422,241 @@ async function runBulk(action, extra = {}) {
 function promptBulkProxy() {
   const px = prompt('Новый прокси (socks5://... или ip:port:user:pass):');
   if (px && px.trim()) runBulk('set_proxy', { proxy: px.trim() });
+}
+function sendSelectedToAutopilot() {
+  if (!SELECTED.size) return toast('Выберите аккаунты галочками', 'warn');
+  switchView('autopilot');
+  document.getElementById('apScope').value = 'selected';
+  toast(`Выбрано ${SELECTED.size} акк. для Автопилота`, 'success');
+}
+
+// ── Media Library (Shared by Autopilot 600 & Upload Studio) ──
+async function loadMediaLibrary() {
+  try {
+    const r = await apiJson('/api/media');
+    MEDIA_LIBRARY = r.files || [];
+    // Auto-select available library creatives if nothing chosen yet
+    if (AP_MEDIA_PICK.size === 0 && MEDIA_LIBRARY.length > 0) {
+      MEDIA_LIBRARY.forEach(f => AP_MEDIA_PICK.add(f.name));
+    }
+    renderMediaPickers();
+  } catch (_) {}
+}
+
+async function uploadToMediaLibrary(fileList) {
+  if (!fileList || !fileList.length) return;
+  const fd = new FormData();
+  for (const f of fileList) fd.append('files', f);
+  try {
+    const r = await apiJson('/api/media/upload', { method: 'POST', body: fd });
+    (r.saved || []).forEach(name => AP_MEDIA_PICK.add(name));
+    toast(`Загружено в библиотеку: ${(r.saved || []).length}`, 'success');
+    await loadMediaLibrary();
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+function toggleApMedia(name) {
+  if (AP_MEDIA_PICK.has(name)) AP_MEDIA_PICK.delete(name); else AP_MEDIA_PICK.add(name);
+  renderMediaPickers();
+}
+function toggleUpLibMedia(name) {
+  if (UP_LIB_PICK.has(name)) UP_LIB_PICK.delete(name); else UP_LIB_PICK.add(name);
+  renderMediaPickers();
+}
+
+function renderMediaPickers() {
+  const apCnt = document.getElementById('apMediaCnt');
+  const apGrid = document.getElementById('apMediaGrid');
+  if (apCnt) apCnt.textContent = AP_MEDIA_PICK.size;
+  if (apGrid) {
+    apGrid.innerHTML = MEDIA_LIBRARY.length
+      ? MEDIA_LIBRARY.map(f => {
+          const picked = AP_MEDIA_PICK.has(f.name);
+          const url = `/api/media/file/${encodeURIComponent(f.name)}`;
+          return `<div class="thumb ${picked ? 'picked' : ''}" onclick="toggleApMedia('${esc(f.name)}')" title="${esc(f.name)}">
+            ${f.is_video ? `<video src="${url}" muted></video>` : `<img src="${url}" alt="" />`}
+            <div class="thumb-check">${picked ? '✓' : ''}</div>
+            <div class="thumb-name">${esc(f.name)}</div>
+          </div>`;
+        }).join('')
+      : '<div class="muted" style="font-size:12px;">Библиотека пуста — нажмите «+ Загрузить»</div>';
+  }
+
+  const upCnt = document.getElementById('upLibCnt');
+  const upGrid = document.getElementById('upLibThumbs');
+  if (upCnt) upCnt.textContent = UP_LIB_PICK.size;
+  if (upGrid) {
+    upGrid.innerHTML = MEDIA_LIBRARY.length
+      ? MEDIA_LIBRARY.map(f => {
+          const picked = UP_LIB_PICK.has(f.name);
+          const url = `/api/media/file/${encodeURIComponent(f.name)}`;
+          return `<div class="thumb ${picked ? 'picked' : ''}" onclick="toggleUpLibMedia('${esc(f.name)}')" title="${esc(f.name)}">
+            ${f.is_video ? `<video src="${url}" muted></video>` : `<img src="${url}" alt="" />`}
+            <div class="thumb-check">${picked ? '✓' : ''}</div>
+            <div class="thumb-name">${esc(f.name)}</div>
+          </div>`;
+        }).join('')
+      : '<div class="muted" style="font-size:12px;">Нет файлов на сервере</div>';
+  }
+}
+
+// ── Goal Autopilot 600 View ──────────────────────────────────
+function phaseBadge(phase) {
+  switch (phase) {
+    case 'goal_reached': return '<span class="badge b-ok">🎯 Цель 600+</span>';
+    case 'uploading': return '<span class="badge b-sage">🚀 Залив</span>';
+    case 'appealing': return '<span class="badge b-warn">🛡 Дожим 2048</span>';
+    case 'monitoring': return '<span class="badge b-cyan">👁 Мониторинг</span>';
+    case 'queued': return '<span class="badge b-dim">В очереди</span>';
+    case 'capped': return '<span class="badge b-warn">Лимит раундов</span>';
+    case 'error': return '<span class="badge b-err">Ошибка</span>';
+    case 'stopped': return '<span class="badge b-dim">Остановлен</span>';
+    default: return `<span class="badge b-dim">${esc(phase)}</span>`;
+  }
+}
+
+function renderAutopilotView() {
+  const ga = STATE.goal_autopilot || {};
+  const cnt = ga.counts || {};
+  const cfg = ga.config || {};
+  const target = cfg.target_views || Number(document.getElementById('apTargetViews')?.value || 600);
+
+  document.getElementById('apKpiTarget').textContent = target.toLocaleString();
+  document.getElementById('apKpiReached').textContent = cnt.goal_reached || 0;
+  document.getElementById('apKpiActive').textContent = ga.active_count || 0;
+  document.getElementById('apKpiViews').textContent = (cnt.total_views || 0).toLocaleString();
+  document.getElementById('apKpiPosts').textContent = `${cnt.total_posts || 0} / ${cnt.total_appeals || 0}`;
+
+  const stBadge = document.getElementById('apStatusBadge');
+  if (ga.running) {
+    stBadge.textContent = `РАБОТАЕТ · #${ga.run_id || ''}`;
+    stBadge.className = 'badge b-ok mono';
+  } else if ((cnt.total || 0) > 0) {
+    stBadge.textContent = `ЗАВЕРШЁН · ${cnt.goal_reached || 0}/${cnt.total || 0}`;
+    stBadge.className = 'badge b-sage mono';
+  } else {
+    stBadge.textContent = 'Ожидание';
+    stBadge.className = 'badge b-dim mono';
+  }
+
+  document.getElementById('apElapsedBadge').textContent = ga.running ? fmtDur(ga.elapsed_sec) : (ga.started_at || '00:00');
+  document.getElementById('btnApStart').disabled = !!ga.running;
+  document.getElementById('btnApStop').disabled = !ga.running;
+
+  const summary = document.getElementById('apSummaryLine');
+  if (ga.running) {
+    summary.textContent = `Запущен в ${ga.started_at} · ср. ${ga.avg_views || 0} просм./акк · потоки: ${cfg.threads || 3} · уник: ${cfg.photo_mode || 'anti_unoriginal'}`;
+  } else if ((cnt.total || 0) > 0) {
+    summary.textContent = `Прогон #${ga.run_id || '—'} · достигли цели: ${cnt.goal_reached || 0}/${cnt.total || 0} (${ga.success_rate_pct || 0}%) · всего просмотров: ${(cnt.total_views || 0).toLocaleString()}`;
+  } else {
+    summary.textContent = 'Автопилот в режиме ожидания. Настройте параметры слева и нажмите «Запустить».';
+  }
+
+  const items = ga.items || [];
+  const tbody = document.getElementById('apTbody');
+  if (!items.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:38px;color:var(--muted);">Пока нет активного прогона автопилота</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = items.map(it => {
+    const tgt = Math.max(1, Number(it.target_views || target || 600));
+    const cur = Number(it.views_total || 0);
+    const pct = Math.min(100, Math.round((cur / tgt) * 100));
+    const barCls = it.phase === 'goal_reached' ? 'reached' : (it.phase === 'error' || it.phase === 'capped' ? 'warn' : '');
+    const vel = Number(it.views_velocity || 0);
+    const handle = it.username || it.account_id;
+    return `<tr>
+      <td>
+        <div class="acc-link" onclick="openDrawer('${esc(it.account_id)}')">@${esc(handle)}</div>
+        <div class="muted" style="font-size:11px;max-width:210px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${esc(it.detail || '')}">${esc(it.detail || '')}</div>
+      </td>
+      <td>
+        <div class="prog-wrap">
+          <div class="prog-top mono">
+            <strong>${cur.toLocaleString()} <span class="muted" style="font-weight:400;">/ ${tgt.toLocaleString()}</span></strong>
+            <span class="${pct >= 100 ? '' : 'muted'}" style="font-size:11px;${pct >= 100 ? 'color:var(--ok);font-weight:700;' : ''}">${pct}%${vel > 0 ? ` · +${vel}/10м` : ''}</span>
+          </div>
+          <div class="prog-track"><div class="prog-fill ${barCls}" style="width:${pct}%;"></div></div>
+        </div>
+      </td>
+      <td>${phaseBadge(it.phase)}</td>
+      <td class="mono" style="font-size:12px;">
+        <div>#${it.round_num || 0}/${it.max_rounds || 3} · ${it.posts_published || 0} п.</div>
+        <div class="muted" style="font-size:11px;">апелл.: ${it.appeals_sent || 0}</div>
+      </td>
+      <td class="mono muted" style="font-size:11.5px;">${esc((it.updated_at || '').slice(0, 5) || '—')}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function startGoalAutopilot() {
+  const scope = document.getElementById('apScope').value;
+  const account_ids = scope === 'selected' ? Array.from(SELECTED) : [];
+  if (scope === 'selected' && !account_ids.length) {
+    return toast('Сначала выберите аккаунты галочками на вкладке «Аккаунты»', 'warn');
+  }
+  const media_files = Array.from(AP_MEDIA_PICK);
+  if (!media_files.length) {
+    return toast('Выберите хотя бы один креатив из библиотеки', 'warn');
+  }
+  const btn = document.getElementById('btnApStart');
+  btn.disabled = true;
+  try {
+    await apiPost('/api/autopilot/goal/start', {
+      target_views: Number(document.getElementById('apTargetViews').value || 600),
+      target_mode: document.getElementById('apTargetMode').value,
+      scope: scope === 'selected' ? 'all_authed' : scope,
+      account_ids,
+      max_accounts: Number(document.getElementById('apMaxAccs').value || 0),
+      media_files,
+      description: document.getElementById('apDesc').value,
+      auto_music_query: document.getElementById('apMusic').value,
+      photo_mode: document.getElementById('apPhotoMode').value,
+      threads: Number(document.getElementById('apThreads').value || 3),
+      copies_per_round: Number(document.getElementById('apCopies').value || 6),
+      max_rounds: Number(document.getElementById('apMaxRounds').value || 3),
+      reupload_wait_minutes: Number(document.getElementById('apWaitMin').value || 25),
+      monitor_interval_sec: Number(document.getElementById('apMonSec').value || 90),
+      topup_copies: Number(document.getElementById('apTopup').value || 3),
+      protect_views_threshold: Number(document.getElementById('apProtectViews').value || 150),
+      region: document.getElementById('apRegion').value || 'US',
+      auto_appeal_2048: document.getElementById('apAuto2048').checked,
+      auto_appeal_studio: document.getElementById('apAutoStudio').checked,
+      auto_refill_pool: document.getElementById('apRefill').checked,
+      delete_old_on_first_round: document.getElementById('apDelFirst').checked,
+    });
+    toast('Автопилот запущен!', 'success');
+    await fetchState();
+  } catch (e) {
+    toast(e.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function stopGoalAutopilot() {
+  try {
+    await apiPost('/api/autopilot/goal/stop');
+    toast('Автопилот остановлен', 'warn');
+    await fetchState();
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function clearGoalAutopilot() {
+  try {
+    await apiPost('/api/autopilot/goal/clear');
+    toast('История прогона очищена', 'info');
+    await fetchState();
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function copyAutopilot(scope, fmt) {
+  try {
+    const r = await apiJson(`/api/autopilot/goal/copy?scope=${encodeURIComponent(scope)}&fmt=${encodeURIComponent(fmt)}`);
+    if (!r.count) return toast('Пока нет подходящих аккаунтов', 'warn');
+    await copyText(r.text, `Скопировано: ${r.count}`);
+  } catch (e) { toast(e.message, 'err'); }
 }
 
 // ── Account Inspector Drawer ─────────────────────────────────
@@ -358,13 +712,13 @@ function renderDrawer() {
     <div class="sec-box">
       <div class="sec-head">
         <span>Посты в Studio (${aud?.total_posts ?? 0})</span>
-        <span class="mono" style="color:var(--cyan);">${(aud?.total_views || 0).toLocaleString()} просм.</span>
+        <span class="mono" style="color:var(--sage);font-weight:600;">${(aud?.total_views || 0).toLocaleString()} просм.</span>
       </div>
       ${posts.length ? `<table class="tbl">
         <tbody>
           ${posts.map(p => `<tr>
             <td style="padding:6px 4px;">
-              <a href="https://www.tiktok.com/@${esc(handle)}/video/${esc(p.item_id)}" target="_blank" class="mono" style="color:#93c5fd;text-decoration:none;font-size:11.5px;">${esc(p.item_id)} ↗</a>
+              <a href="https://www.tiktok.com/@${esc(handle)}/video/${esc(p.item_id)}" target="_blank" class="mono" style="color:var(--sage);text-decoration:none;font-size:11.5px;font-weight:600;">${esc(p.item_id)} ↗</a>
               <div class="muted" style="font-size:11px;max-width:210px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(p.desc || '—')}</div>
             </td>
             <td class="mono" style="padding:6px 4px;font-size:12px;">${(p.play_count || 0).toLocaleString()}</td>
@@ -399,7 +753,7 @@ function renderDrawer() {
   `;
 }
 
-// ── Single-Account Actions ───────────────────────────────────
+// ── Single-Account & Topbar Actions ──────────────────────────
 async function auditAll() {
   const b = document.getElementById('btnTopAudit'); b.disabled = true;
   try { await apiPost('/api/audit-all?threads=5'); toast('Аудит завершён', 'success'); await fetchState(); }
@@ -456,16 +810,15 @@ async function deleteSinglePost(aid, itemId) {
   } catch (e) { toast(e.message, 'err'); }
 }
 async function fetchOutlookOtp(aid) {
-  toast(`Читаю код из Outlook...`, 'info');
+  toast('Читаю код из Outlook...', 'info');
   try {
     const r = await apiPost(`/api/accounts/${encodeURIComponent(aid)}/outlook-otp`);
-    navigator.clipboard?.writeText(r.code).catch(() => {});
-    toast(`Код: ${r.code} (скопирован)`, 'success');
+    await copyText(r.code, `Код: ${r.code} (скопирован)`);
   } catch (e) { toast(e.message, 'err'); }
 }
 async function saveDrawerProxy(aid) {
   const px = document.getElementById('drProxyIn').value.trim();
-  if (!px) return toast('Введи прокси', 'warn');
+  if (!px) return toast('Введите прокси', 'warn');
   try {
     const r = await apiPost(`/api/accounts/${encodeURIComponent(aid)}/proxy`, { proxy: px });
     toast(`Прокси OK: ${r.country} · ${r.ip}`, 'success');
@@ -498,10 +851,9 @@ async function copyAccounts(scope, fmt = 'lines') {
     await copyText(r.text, `Скопировано: ${r.count}`);
   } catch (e) { toast(e.message, 'err'); }
 }
-
 async function copySelected(fmt = 'lines') {
   const ids = Array.from(SELECTED);
-  if (!ids.length) return toast('Выбери аккаунты галочками', 'warn');
+  if (!ids.length) return toast('Выберите аккаунты галочками', 'warn');
   try {
     const r = await apiJson(`/api/accounts/copy-export?scope=selected&fmt=${encodeURIComponent(fmt)}&ids=${encodeURIComponent(ids.join(','))}`);
     if (!r.count) return toast('Список пуст', 'warn');
@@ -522,7 +874,7 @@ function renderMediaThumbs() {
   document.getElementById('mediaThumbs').innerHTML = UP_FILES.map((f, i) => {
     const url = URL.createObjectURL(f);
     const isVid = f.name.toLowerCase().endsWith('.mp4');
-    return `<div class="thumb">
+    return `<div class="thumb picked">
       ${isVid ? `<video src="${url}" muted></video>` : `<img src="${url}" alt="" />`}
       <button class="thumb-rm" onclick="removeMediaFile(${i})">✕</button>
     </div>`;
@@ -531,7 +883,7 @@ function renderMediaThumbs() {
 
 async function previewUniquifier() {
   const photo = UP_FILES.find(f => !f.name.toLowerCase().endsWith('.mp4'));
-  if (!photo) return toast('Сначала добавь фото', 'warn');
+  if (!photo) return toast('Сначала добавьте фото с диска', 'warn');
   const fd = new FormData();
   fd.append('file', photo);
   fd.append('photo_mode', document.getElementById('upPhotoMode').value);
@@ -540,8 +892,8 @@ async function previewUniquifier() {
     const box = document.getElementById('uniqPreviewBox');
     box.classList.remove('hidden');
     box.innerHTML = `
-      <div><div class="mono muted" style="font-size:11px;margin-bottom:3px;">ДО (${r.before_kb} КБ)</div><img src="${r.before_data_url}" style="width:100%;border-radius:8px;" /></div>
-      <div><div class="mono" style="font-size:11px;color:var(--ok);margin-bottom:3px;">ПОСЛЕ (${r.after_kb} КБ)</div><img src="${r.after_data_url}" style="width:100%;border-radius:8px;" /></div>`;
+      <div><div class="mono muted" style="font-size:11px;margin-bottom:3px;">ДО (${r.before_kb} КБ)</div><img src="${r.before_data_url}" style="width:100%;border-radius:10px;" /></div>
+      <div><div class="mono" style="font-size:11px;color:var(--ok);margin-bottom:3px;">ПОСЛЕ (${r.after_kb} КБ)</div><img src="${r.after_data_url}" style="width:100%;border-radius:10px;" /></div>`;
   } catch (e) { toast(e.message, 'err'); }
 }
 
@@ -574,15 +926,17 @@ function pickUploadSet(mode) {
   (STATE.accounts || []).forEach(a => {
     if (mode === 'all') UP_PICK.add(a.account_id);
     else if (mode === 'clean' && a.audit?.account_health === 'eligible') UP_PICK.add(a.account_id);
-    else if (mode === 'unauth' && !a.authenticated) UP_PICK.add(a.account_id);
   });
   renderUploadPicker();
 }
 
 async function submitCampaign() {
-  if (!UP_FILES.length) return toast('Добавь видео MP4 или фото!', 'warn');
+  if (!UP_FILES.length && !UP_LIB_PICK.size) return toast('Добавьте файлы или выберите из библиотеки сервера!', 'warn');
   const fd = new FormData();
   UP_FILES.forEach(f => fd.append('files', f));
+  if (!UP_FILES.length && UP_LIB_PICK.size) {
+    fd.append('server_media_files', Array.from(UP_LIB_PICK).join(','));
+  }
   fd.append('account_ids', Array.from(UP_PICK).join(','));
   fd.append('description', document.getElementById('upDesc').value);
   fd.append('copies_count', document.getElementById('upCopies').value);
@@ -611,7 +965,7 @@ async function submitCampaign() {
 }
 
 async function submitSingleUpload() {
-  if (!UP_FILES.length) return toast('Добавь видео MP4 или фото!', 'warn');
+  if (!UP_FILES.length) return toast('Добавьте видео MP4 или фото с диска!', 'warn');
   const fd = new FormData();
   UP_FILES.forEach(f => fd.append('files', f));
   fd.append('account_ids', Array.from(UP_PICK).join(','));
@@ -646,13 +1000,13 @@ function renderUnbanView() {
 
   const items = uq.items || [];
   document.getElementById('unbanQueueBox').innerHTML = items.length
-    ? `<div style="display:flex;flex-direction:column;gap:5px;max-height:240px;overflow-y:auto;">
+    ? `<div style="display:flex;flex-direction:column;gap:6px;max-height:240px;overflow-y:auto;">
         ${items.map(it => {
           const detail = it.status === 'waiting'
             ? `тишина ${it.idle_sec || 0}/${it.quiet_sec || 0}с`
             : (it.folder_title || it.status);
-          return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 9px;border-radius:7px;background:var(--bg);border:1px solid var(--border);font-size:12px;">
-            <span class="mono">@${esc(it.username || it.account_id)}</span>
+          return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 10px;border-radius:9px;background:var(--surface-subtle);border:1px solid var(--border);font-size:12px;">
+            <span class="mono" style="font-weight:600;">@${esc(it.username || it.account_id)}</span>
             <span class="muted" style="font-size:11px;">${esc(detail)}</span>
             <span class="badge ${it.status === 'done' ? (it.folder_key === 'clean' ? 'b-ok' : 'b-warn') : (it.status === 'error' ? 'b-err' : 'b-warn')}">${esc(it.folder_key || it.status)}${it.appeals_sent ? ' · +' + it.appeals_sent : ''}</span>
           </div>`;
@@ -690,7 +1044,7 @@ function toggleAllUnbanPick() {
 async function startUnbanQueue() {
   const scope = document.getElementById('unbanScope').value;
   const account_ids = scope === 'selected' ? Array.from(UNBAN_PICK) : [];
-  if (scope === 'selected' && !account_ids.length) return toast('Выбери аккаунты справа', 'warn');
+  if (scope === 'selected' && !account_ids.length) return toast('Выберите аккаунты справа', 'warn');
   try {
     await apiPost('/api/unban-queue/start', {
       scope: scope === 'selected' ? 'all' : scope,
@@ -735,7 +1089,7 @@ async function runLinePreview() {
   const region = document.getElementById('impRegion').value;
   if (!lines_text.trim()) {
     document.getElementById('previewBadge').textContent = '0';
-    document.getElementById('previewBox').innerHTML = 'Вставь строки слева.';
+    document.getElementById('previewBox').innerHTML = 'Вставьте строки аккаунтов слева.';
     return;
   }
   try {
@@ -743,7 +1097,7 @@ async function runLinePreview() {
     document.getElementById('previewBadge').textContent = `${r.valid_count}/${r.rows.length}`;
     document.getElementById('previewBox').innerHTML = `<table class="tbl">
       <tbody>${r.rows.map(x => x.ok
-        ? `<tr><td class="mono">${esc(x.account_id)}</td><td><span class="badge b-cyan">${esc(x.format)}</span></td><td class="mono muted" style="font-size:11px;">${esc(x.proxy_masked)}</td></tr>`
+        ? `<tr><td class="mono">${esc(x.account_id)}</td><td><span class="badge b-sage">${esc(x.format)}</span></td><td class="mono muted" style="font-size:11px;">${esc(x.proxy_masked)}</td></tr>`
         : `<tr><td colspan="3" style="color:var(--err);">✕ ${esc(x.error)}</td></tr>`
       ).join('')}</tbody></table>`;
   } catch (_) {}
@@ -768,7 +1122,7 @@ async function submitBatchImport() {
 }
 async function submitFolderImport() {
   const folder_path = document.getElementById('folderPathInput').value.trim();
-  if (!folder_path) return toast('Укажи путь', 'warn');
+  if (!folder_path) return toast('Укажите путь к папке', 'warn');
   try {
     const r = await apiPost('/api/import-folder', {
       folder_path,
@@ -781,7 +1135,7 @@ async function submitFolderImport() {
   } catch (e) { toast(e.message, 'err'); }
 }
 
-// ── Tools: Clean Export / Dump & Shadow Checker ──────────────
+// ── Tools: Clean Dump & Shadow Checker ───────────────────────
 async function loadLastShadow() {
   try {
     const d = await apiJson('/api/shadow-checker/last');
@@ -813,20 +1167,13 @@ function copyShadowRow(idx, kind) {
   else copyText(r.copy_line || ('@' + r.username), `Строка @${r.username} скопирована`);
 }
 function copyShadowDump(mode) {
-  if (!LAST_SHADOW_ROWS.length) return toast('Сначала нажми «▶ Выгрузить»', 'warn');
+  if (!LAST_SHADOW_ROWS.length) return toast('Сначала нажмите «Выгрузить и проверить»', 'warn');
   let text = '';
-  if (mode === 'telegram') {
-    text = LAST_SHADOW_ROWS.map(r => r.telegram_text).join('\n\n────────────────\n\n');
-  } else if (mode === 'usernames') {
-    text = LAST_SHADOW_ROWS.map(r => '@' + r.username).join('\n');
-  } else if (mode === 'urls') {
-    text = LAST_SHADOW_ROWS.flatMap(r => r.post_urls || []).join('\n');
-  } else if (mode === 'clean_lines') {
-    const clean = LAST_SHADOW_ROWS.filter(r => r.verdict === 'clean');
-    text = clean.map(r => r.copy_line || ('@' + r.username)).join('\n');
-  } else {
-    text = LAST_SHADOW_ROWS.map(r => r.copy_line || ('@' + r.username)).join('\n');
-  }
+  if (mode === 'telegram') text = LAST_SHADOW_ROWS.map(r => r.telegram_text).join('\n\n────────────────\n\n');
+  else if (mode === 'usernames') text = LAST_SHADOW_ROWS.map(r => '@' + r.username).join('\n');
+  else if (mode === 'urls') text = LAST_SHADOW_ROWS.flatMap(r => r.post_urls || []).join('\n');
+  else if (mode === 'clean_lines') text = LAST_SHADOW_ROWS.filter(r => r.verdict === 'clean').map(r => r.copy_line || ('@' + r.username)).join('\n');
+  else text = LAST_SHADOW_ROWS.map(r => r.copy_line || ('@' + r.username)).join('\n');
   copyText(text, 'Скопировано в буфер обмена');
 }
 function renderShadowTable(rows) {
@@ -834,7 +1181,7 @@ function renderShadowTable(rows) {
     document.getElementById('shadowResultsBox').innerHTML = '<div class="muted">Нет данных</div>';
     return;
   }
-  document.getElementById('shadowResultsBox').innerHTML = `<table class="tbl">
+  document.getElementById('shadowResultsBox').innerHTML = `<div class="tbl-wrap"><table class="tbl">
     <thead><tr><th>Аккаунт</th><th>Посты</th><th>Просмотры</th><th>Гео</th><th>Тень</th><th>Studio / 2048</th><th style="text-align:right;">Копия</th></tr></thead>
     <tbody>${rows.map((r, idx) => {
       const bCls = r.verdict === 'clean' ? 'b-ok' : (r.verdict === 'partial_shadow' ? 'b-warn' : 'b-err');
@@ -847,18 +1194,15 @@ function renderShadowTable(rows) {
       const postsDetail = posts.length
         ? `<details style="margin-top:4px;"><summary class="muted" style="cursor:pointer;font-size:11px;">Показать ${posts.length} постов</summary>
             <div style="margin-top:5px;display:flex;flex-direction:column;gap:4px;">
-              ${posts.map((p, pi) => `<div style="font-size:11.5px;padding:4px 7px;border-radius:6px;background:var(--bg);border:1px solid var(--border);display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;">
-                <span><a href="${esc(p.url)}" target="_blank" class="mono" style="color:#93c5fd;text-decoration:none;">#${pi + 1}</a> · 👁 <strong>${p.views}</strong> ❤️ ${p.likes} 💬 ${p.comments} 📣 ${p.shares} 💾 ${p.saves}</span>
-                <span>🌟 Тень: <strong>${esc(p.shadow_label)}</strong> · 👮 ${esc(p.moderation_label)} · ${esc(p.region_flag)} ${esc(p.region || '')}${p.studio_note ? ` · <span class="muted">${esc(p.studio_note)}</span>` : ''}</span>
+              ${posts.map((p, pi) => `<div style="font-size:11.5px;padding:5px 8px;border-radius:8px;background:var(--surface-subtle);border:1px solid var(--border);display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+                <span><a href="${esc(p.url)}" target="_blank" class="mono" style="color:var(--sage);text-decoration:none;font-weight:600;">#${pi + 1}</a> · 👁 <strong>${p.views}</strong> ❤️ ${p.likes} 💬 ${p.comments} 📣 ${p.shares} 💾 ${p.saves}</span>
+                <span>Тень: <strong>${esc(p.shadow_label)}</strong> · ${esc(p.moderation_label)} · ${esc(p.region_flag)} ${esc(p.region || '')}${p.studio_note ? ` · <span class="muted">${esc(p.studio_note)}</span>` : ''}</span>
               </div>`).join('')}
             </div>
           </details>`
         : '';
       return `<tr>
-        <td>
-          <div class="mono" style="font-weight:600;">@${esc(r.username)}</div>
-          ${postsDetail}
-        </td>
+        <td><div class="mono" style="font-weight:600;">@${esc(r.username)}</div>${postsDetail}</td>
         <td class="mono">${r.public_posts_count}/${r.total_posts}</td>
         <td class="mono"><strong>${(r.total_views || 0).toLocaleString()}</strong></td>
         <td class="mono muted">${esc((r.regions || []).join(',') || '—')}</td>
@@ -869,12 +1213,12 @@ function renderShadowTable(rows) {
           <button class="btn btn-xs" onclick="copyShadowRow(${idx}, 'tg')" title="Скопировать выгрузку постов">📨</button>
         </td>
       </tr>`;
-    }).join('')}</tbody></table>`;
+    }).join('')}</tbody></table></div>`;
 }
 
 async function runProxyTest() {
   const proxies_text = document.getElementById('proxyTestInput').value;
-  if (!proxies_text.trim()) return toast('Вставь прокси', 'warn');
+  if (!proxies_text.trim()) return toast('Вставьте прокси', 'warn');
   const btn = document.getElementById('btnTestProxies'); btn.disabled = true;
   try {
     const r = await apiPost('/api/proxies/test', { proxies_text });
@@ -920,7 +1264,7 @@ async function saveConfig() {
 
 async function runSpy() {
   const username = document.getElementById('spyUserInput').value.trim();
-  if (!username) return toast('Введи @username', 'warn');
+  if (!username) return toast('Введите @username', 'warn');
   const btn = document.getElementById('btnSpy'); btn.disabled = true;
   try {
     const r = await apiPost('/api/spy', { username });
@@ -936,8 +1280,7 @@ async function genTotp() {
   try {
     const r = await apiPost('/api/totp/generate', { secret });
     document.getElementById('totpResultBox').textContent = `${r.code} (${r.remaining_sec}с)`;
-    navigator.clipboard?.writeText(r.code).catch(() => {});
-    toast('Код скопирован', 'success');
+    await copyText(r.code, 'Код скопирован');
   } catch (e) { toast(e.message, 'err'); }
 }
 
@@ -966,8 +1309,10 @@ function bindDrop(id, fn) {
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
 
 (async function boot() {
+  applyTheme(localStorage.getItem('kintaro_theme') || 'light');
+  document.getElementById('connAddr').textContent = window.location.host || '127.0.0.1:8080';
   bindDrop('mediaDropzone', files => handleMediaFiles(files));
-  await fetchState();
+  await Promise.all([fetchState(), loadMediaLibrary()]);
   (STATE.logs || []).slice(-60).forEach(appendLog);
 
   const es = new EventSource('/api/events');
@@ -975,9 +1320,10 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(
     try {
       const item = JSON.parse(ev.data);
       appendLog(item);
-      if (item.kind === 'audit_updated' || item.kind === 'watchdog' || item.kind === 'jobs_updated' || item.kind === 'unban_queue') fetchState();
+      if (['audit_updated', 'watchdog', 'jobs_updated', 'unban_queue', 'autopilot'].includes(item.kind)) {
+        fetchState();
+      }
     } catch (_) {}
   };
-  // Poll every 5s so external CLI runs (audit_cache.json) appear live in UI
   setInterval(fetchState, 5000);
 })();

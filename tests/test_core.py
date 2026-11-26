@@ -1263,3 +1263,169 @@ def test_web_watchdog_autostart_and_external_cache_reload(tmp_path: Path) -> Non
         assert st_on["watchdog"]["cycles"] >= 1
         r_stop = tc2.post("/api/watchdog", json={"enabled": False})
         assert r_stop.status_code == 200 and r_stop.json()["enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_goal_autopilot_600_reaches_target_smart_topup_and_repour(tmp_path: Path) -> None:
+    import asyncio
+    from kintaro_auto.appeals import AccountAppealSummary, AccountAuditResult
+    from kintaro_auto.autopilot import GoalAutopilotConfig, GoalAutopilotManager
+    from kintaro_auto.models import CampaignAccountResult
+
+    sdir = tmp_path / "state"
+    mdir = sdir / "media"
+    mdir.mkdir(parents=True, exist_ok=True)
+    slide = mdir / "creo1.jpg"
+    Image.new("RGB", (200, 300), (80, 120, 95)).save(slide, format="JPEG")
+
+    cfg = AppConfig(state_dir=str(sdir))
+    store = StateStore(sdir)
+    for aid in ("ap_fast", "ap_topup", "ap_repour"):
+        store.save_account(
+            AccountRecord(
+                account_id=aid,
+                username=aid,
+                password="p",
+                proxy="socks5://u:p@127.0.0.1:1080",
+                region="US",
+                authenticated=True,
+                device={"cookies": {"sessionid": "s1"}},
+            )
+        )
+
+    audit_cache: dict[str, dict] = {
+        aid: {"account_health": "eligible", "total_posts": 0, "total_views": 0}
+        for aid in ("ap_fast", "ap_topup", "ap_repour")
+    }
+    busy_set: set[str] = set()
+    managed_set: set[str] = set()
+    recorded_campaigns: dict[str, list[tuple[int, bool, str]]] = {
+        "ap_fast": [],
+        "ap_topup": [],
+        "ap_repour": [],
+    }
+    mon_calls: dict[str, int] = {"ap_fast": 0, "ap_topup": 0, "ap_repour": 0}
+
+    async def _fake_upload(acc: AccountRecord, camp: CampaignConfig, _cb) -> CampaignAccountResult:
+        recorded_campaigns[acc.account_id].append((camp.copies_count, camp.delete_old_posts, camp.photo_mode))
+        return CampaignAccountResult(
+            account_id=acc.account_id,
+            username=acc.username or acc.account_id,
+            status="completed",
+            posts_published=camp.copies_count,
+            target_posts=camp.copies_count,
+            appeals_sent=2,
+            initial_views=20,
+            post_urls=[f"https://www.tiktok.com/@{acc.account_id}/photo/100{len(recorded_campaigns[acc.account_id])}"],
+        )
+
+    async def _fake_appeal(acc: AccountRecord, _gcfg: GoalAutopilotConfig, _stop) -> AccountAppealSummary:
+        return AccountAppealSummary(
+            account_id=acc.account_id,
+            audit=AccountAuditResult(account_id=acc.account_id, username=acc.account_id, account_health="eligible"),
+            notice_appeals_verified=1,
+        )
+
+    async def _fake_monitor(acc: AccountRecord, _gcfg: GoalAutopilotConfig) -> dict:
+        aid = acc.account_id
+        mon_calls[aid] += 1
+        rnum = len(recorded_campaigns[aid])
+        if aid == "ap_fast":
+            return {"views_total": 640, "best_post_views": 220, "posts_live": 6, "appeals_sent": 0, "health": "eligible", "folder_key": "clean", "username": aid}
+        if aid == "ap_topup":
+            if rnum == 1:
+                return {"views_total": 260, "best_post_views": 90, "posts_live": 6, "appeals_sent": 0, "health": "eligible", "folder_key": "clean", "username": aid}
+            return {"views_total": 680, "best_post_views": 240, "posts_live": 9, "appeals_sent": 1, "health": "eligible", "folder_key": "clean", "username": aid}
+        # ap_repour: dead round 1 (<150), hits 620 on round 2!
+        if rnum == 1:
+            return {"views_total": 20, "best_post_views": 10, "posts_live": 6, "appeals_sent": 0, "health": "eligible", "folder_key": "clean", "username": aid}
+        return {"views_total": 620, "best_post_views": 210, "posts_live": 6, "appeals_sent": 0, "health": "eligible", "folder_key": "clean", "username": aid}
+
+    async def _fast_sleep(_s: float) -> None:
+        await asyncio.sleep(0.001)
+
+    mgr = GoalAutopilotManager(
+        get_cfg=lambda: cfg,
+        get_store=lambda: store,
+        get_audit_cache=lambda: audit_cache,
+        busy_upload_accounts=busy_set,
+        managed_accounts=managed_set,
+        upload_round_fn=_fake_upload,
+        appeal_fn=_fake_appeal,
+        monitor_fn=_fake_monitor,
+        sleep_fn=_fast_sleep,
+    )
+
+    # Override time.time slightly via short wait window (`reupload_wait_minutes=0` clamped to 2 -> monkeypatch time)
+    orig_start = mgr.start
+    gcfg = GoalAutopilotConfig(
+        target_views=600,
+        media_files=["creo1.jpg"],
+        copies_per_round=6,
+        topup_copies=3,
+        protect_views_threshold=150,
+        max_rounds=3,
+        threads=3,
+        appeal_threads=3,
+        monitor_interval_sec=15,
+        reupload_wait_minutes=2,
+        scope="clean_empty",
+        auto_refill_pool=False,
+    )
+
+    # Advance clock across monitor sleeps so wait_limit_min is reached immediately in test
+    fake_now = [1_000_000.0]
+    import kintaro_auto.autopilot as ap_mod
+    orig_time = ap_mod.time.time
+
+    async def _clock_sleep(s: float) -> None:
+        fake_now[0] += max(s, 150.0)
+        await asyncio.sleep(0.002)
+
+    mgr._sleep_fn = _clock_sleep
+    ap_mod.time.time = lambda: fake_now[0]
+    try:
+        mgr.start(gcfg)
+        for _ in range(200):
+            if not mgr.running:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        ap_mod.time.time = orig_time
+
+    snap = mgr.snapshot()
+    assert snap["running"] is False
+    assert snap["counts"]["goal_reached"] == 3
+    assert snap["counts"]["total_views"] == 640 + 680 + 620
+
+    # Verify smart strategies!
+    # ap_fast: 1 round (6 posts, delete_old=False, anti_unoriginal)
+    assert recorded_campaigns["ap_fast"] == [(6, False, "anti_unoriginal")]
+    # ap_topup: round 1 (6, False, anti_unoriginal) -> round 2 NON-DESTRUCTIVE TOP-UP (3, False, minimal_snow)!
+    assert recorded_campaigns["ap_topup"] == [(6, False, "anti_unoriginal"), (3, False, "minimal_snow")]
+    # ap_repour: round 1 (6, False, anti_unoriginal) -> round 2 CLEAN RE-POUR (6, True, minimal_snow)!
+    assert recorded_campaigns["ap_repour"] == [(6, False, "anti_unoriginal"), (6, True, "minimal_snow")]
+
+    # Verify copy export & persisted state
+    cp = mgr.build_copy_payload(scope="reached", fmt="usernames")
+    assert cp["count"] == 3
+    assert "@ap_fast" in cp["text"] and "@ap_topup" in cp["text"] and "@ap_repour" in cp["text"]
+    assert (sdir / "autopilot_state.json").is_file()
+    assert not busy_set and not managed_set
+
+
+def test_web_goal_autopilot_api_endpoints(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+    from kintaro_auto.web import create_web_app
+
+    cfg_path = tmp_path / "config.toml"
+    cfg_path.write_text(f'state_dir = "{tmp_path / "state"}"\n', encoding="utf-8")
+    app = create_web_app(cfg_path)
+    with TestClient(app) as tc:
+        st = tc.get("/api/state").json()
+        assert "goal_autopilot" in st
+        assert st["goal_autopilot"]["running"] is False
+        r_st = tc.get("/api/autopilot/goal/status")
+        assert r_st.status_code == 200 and r_st.json()["ok"] is True
+        r_cp = tc.get("/api/autopilot/goal/copy?scope=reached&fmt=lines")
+        assert r_cp.status_code == 200 and r_cp.json()["count"] == 0

@@ -25,6 +25,31 @@ PHOTO_MAX_COUNT = 10                 # Max 10 files per kintaro-api.json
 
 
 PHOTO_UNIQUIFIER_PRESETS: dict[str, dict[str, Any]] = {
+    "anti_unoriginal": {
+        "mode": "anti_unoriginal",
+        "crop_x_min_pct": 1.8,
+        "crop_x_max_pct": 3.4,
+        "crop_y_min_pct": 2.4,
+        "crop_y_max_pct": 4.6,
+        "max_tilt_deg": 0.95,
+        "snow_min_flakes": 95,
+        "snow_max_flakes": 170,
+        "enable_bokeh": False,
+        "enable_wind_trail": True,
+        "tone_jitter_pct": 2.9,
+        "noise_sigma": 2.1,
+        "vignette_pct": 4.8,
+        "border_px": 0,
+        "flip_horizontal": False,
+        "perspective_pct": 1.5,
+        "ambient_frame_pct": 3.8,
+        "hue_shift_deg": 7.5,
+        "light_leak_pct": 6.8,
+        "chromatic_px": 1,
+        "canvas_jitter_px": 18,
+        "jpeg_quality_min": 86,
+        "jpeg_quality_max": 93,
+    },
     "minimal_snow": {
         "mode": "minimal_snow",
         "crop_x_min_pct": 0.8,
@@ -542,16 +567,30 @@ def uniquify_photo_bytes(
     mode: str = "minimal_snow",
     overrides: dict[str, Any] | None = None,
     rng: random.Random | None = None,
+    copy_index: int | None = None,
 ) -> bytes:
     """
     Renders freshly uniquified JPEG bytes from raw image bytes using the configured
-    Anti-pHash / Anti-ViT preset (`minimal_snow` default, `minimal`, `stealth`, `medium`, `boosted`, `ultra_hard`, `custom`, `off`).
+    Anti-pHash / Anti-ViT preset (`anti_unoriginal`, `minimal_snow`, `minimal`, `stealth`,
+    `medium`, `boosted`, `ultra_hard`, `custom`, `off`).
+    When `copy_index` is supplied (0, 1, 2, ... for multi-copy batches), applies stratified
+    per-copy quadrant/hue/scale diversity so consecutive copies on the same account never
+    collide in TikTok's `UNORIGINAL_NR` visual embedding detector.
     """
     cfg = profile or PhotoProfile.resolve(None, mode_override=mode, overrides=overrides)
     if cfg.mode == "off":
         return raw_bytes
 
     r = rng or random.Random()
+    if copy_index is not None and copy_index >= 0 and cfg.mode in ("anti_unoriginal", "medium", "boosted", "ultra_hard", "stealth"):
+        # Stratified per-copy offsets guarantee visual distance between copy #1..#6 on the same account
+        slot = int(copy_index) % 6
+        cfg = PhotoProfile(**asdict(cfg))
+        cfg.ambient_frame_pct = max(0.0, min(15.0, cfg.ambient_frame_pct + (slot % 3) * 0.85))
+        cfg.hue_shift_deg = max(cfg.hue_shift_deg, 4.5 + (slot * 1.4))
+        cfg.light_leak_pct = max(cfg.light_leak_pct, 4.0 + ((slot * 2) % 6) * 0.9)
+        cfg.enable_bokeh = cfg.enable_bokeh or (slot in (2, 5))
+        cfg.border_px = cfg.border_px if cfg.border_px > 0 else (2 if slot in (3, 5) else 0)
     with Image.open(io.BytesIO(raw_bytes)) as src_im:
         im = ImageOps.exif_transpose(src_im).convert("RGB")
         orig_w, orig_h = im.size
@@ -938,6 +977,7 @@ def uniquify_photos(
     *,
     mode_override: str | None = None,
     overrides: dict[str, Any] | None = None,
+    copy_index: int | None = None,
 ) -> list[PreparedMedia]:
     if not source_paths:
         raise ValueError("Не передано ни одного фото для фото-поста.")
@@ -975,7 +1015,9 @@ def uniquify_photos(
             )
             continue
 
-        uniq_bytes = uniquify_photo_bytes(src.read_bytes(), profile=profile, rng=r)
+        uniq_bytes = uniquify_photo_bytes(
+            src.read_bytes(), profile=profile, rng=r, copy_index=copy_index
+        )
         if len(uniq_bytes) > PHOTO_MAX_BYTES:
             raise ValueError(
                 f"Уникализированное фото {src} превысило лимит 10 МБ ({len(uniq_bytes) / (1024 * 1024):.2f} МБ)."

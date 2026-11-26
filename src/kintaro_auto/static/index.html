@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>KINTARO // TikTok Farm OS & Unban Center</title>
+  <title>KINTARO FARM OS</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 36 36'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%236366f1'/%3E%3Cstop offset='1' stop-color='%2306b6d4'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='36' height='36' rx='10' fill='url(%23g)'/%3E%3Ctext x='18' y='24' text-anchor='middle' fill='%23fff' font-family='sans-serif' font-weight='800' font-size='18'%3EK%3C/text%3E%3C/svg%3E" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -13,843 +13,519 @@
 <body>
 
 <div class="shell">
-  <!-- LEFT NAVIGATION RAIL -->
+  <!-- COMPACT 5-TAB SIDEBAR -->
   <aside class="rail">
     <div class="brand">
       <div class="brand-mark">K</div>
       <div>
         <div class="brand-name">KINTARO FARM OS</div>
-        <div class="brand-ver mono">v5.0 · Windows & Linux Studio</div>
+        <div class="brand-sub">TikTok Panel</div>
       </div>
     </div>
 
-    <div class="nav-group-label">Управление</div>
-    <button class="nav-item active" data-view="fleet" onclick="switchView('fleet')">
-      <span class="nav-item-left"><span>🛡️</span><span>Флот и Папки</span></span>
-      <span class="nav-pill mono" id="navFleetCnt">0</span>
+    <button class="nav-item active" data-view="accounts" onclick="switchView('accounts')">
+      <span class="nav-left"><span>👥</span><span>Аккаунты</span></span>
+      <span class="nav-pill mono" id="navAccCnt">0</span>
     </button>
     <button class="nav-item" data-view="upload" onclick="switchView('upload')">
-      <span class="nav-item-left"><span>🚀</span><span>Массовый Залив</span></span>
-      <span class="nav-pill mono" id="navUploadThreadsPill">5×</span>
+      <span class="nav-left"><span>🚀</span><span>Залив</span></span>
     </button>
     <button class="nav-item" data-view="unban" onclick="switchView('unban')">
-      <span class="nav-item-left"><span>⚡</span><span>Снятие огранов</span></span>
-      <span class="nav-pill mono" id="navUnbanPill">2048</span>
-    </button>
-    <button class="nav-item" data-view="shadow" onclick="switchView('shadow')">
-      <span class="nav-item-left"><span>👁</span><span>Чекер Тени</span></span>
-      <span class="nav-pill mono" id="navShadowPill">FYP</span>
+      <span class="nav-left"><span>⚡</span><span>Ограны</span></span>
+      <span class="nav-pill mono hidden" id="navOgranCnt">0</span>
     </button>
     <button class="nav-item" data-view="import" onclick="switchView('import')">
-      <span class="nav-item-left"><span>📥</span><span>Импорт и Вход</span></span>
-      <span class="nav-pill">Hub</span>
-    </button>
-
-    <div class="nav-group-label">Инструменты</div>
-    <button class="nav-item" data-view="spy" onclick="switchView('spy')">
-      <span class="nav-item-left"><span>🕵️</span><span>Шпион & Комменты</span></span>
-      <span class="nav-pill">TOP</span>
+      <span class="nav-left"><span>📥</span><span>Импорт</span></span>
     </button>
     <button class="nav-item" data-view="tools" onclick="switchView('tools')">
-      <span class="nav-item-left"><span>🔥</span><span>Буст & Оформитель</span></span>
+      <span class="nav-left"><span>⚙️</span><span>Ещё</span></span>
     </button>
 
-    <div class="nav-group-label">Контроль</div>
-    <button class="nav-item" data-view="analytics" onclick="switchView('analytics')">
-      <span class="nav-item-left"><span>📊</span><span>Аналитика & Пилот</span></span>
-      <span class="nav-pill mono" id="navViewsPill">0</span>
-    </button>
-    <button class="nav-item" data-view="settings" onclick="switchView('settings')">
-      <span class="nav-item-left"><span>⚙️</span><span>Прокси и Конфиг</span></span>
-    </button>
+    <div class="rail-spacer"></div>
 
-    <div class="rail-footer">
-      <div class="wd-card">
-        <div class="wd-row" style="margin-bottom:8px;">
-          <span style="display:flex;align-items:center;gap:7px;font-weight:600;">
-            <span id="wdDot" class="dot"></span>
-            <span>Сторож 24/7</span>
-          </span>
-          <strong class="mono" id="wdStateTxt" style="font-size:11px;color:var(--text-dim);">OFF</strong>
-        </div>
-        <div style="font-size:11px;color:var(--muted);margin-bottom:9px;">
-          Лёгкий HTTP-опрос по кукам раз в 95–165с + авто-снятие и Private для FAILED.
-        </div>
-        <button id="wdBtn" class="btn btn-sm" style="width:100%;" onclick="toggleWatchdog()">Включить сторожа</button>
+    <div class="rail-foot">
+      <div class="wd-row" onclick="toggleWatchdog()" title="Авто-снятие огранов в фоне каждые 95–165с">
+        <span style="display:flex;align-items:center;gap:7px;">
+          <span id="wdDot" class="dot"></span>
+          <span>Сторож 24/7</span>
+        </span>
+        <strong class="mono" id="wdLabel" style="font-size:11px;color:var(--muted);">OFF</strong>
       </div>
-
-      <button class="kbd-hint" onclick="openCmdK()">
-        <span>Быстрые команды</span>
-        <kbd>Ctrl K</kbd>
-      </button>
     </div>
   </aside>
 
   <!-- MAIN COLUMN -->
   <div class="main-col">
+    <!-- SLIM TOPBAR (NO OVERFLOW) -->
     <header class="topbar">
-      <div style="display:flex;align-items:center;gap:12px;">
-        <div class="page-title" id="topTitle">Флот аккаунтов и снятие огранов</div>
-        <div id="jobsBadge" class="job-badge hidden">
-          <span class="spin"></span>
-          <span id="jobsText">Выполняется задача...</span>
+      <div class="top-left">
+        <div class="page-title" id="topTitle">Аккаунты</div>
+        <div class="stat-strip">
+          <button class="stat-pill" onclick="jumpFilter('all')">Всего: <strong class="mono" id="stTotal">0</strong></button>
+          <button class="stat-pill" onclick="jumpFilter('authed')">Вход: <strong class="mono" id="stAuth">0</strong></button>
+          <button class="stat-pill ok" onclick="jumpFilter('eligible')">Чистых: <strong class="mono" id="stClean">0</strong></button>
+          <button class="stat-pill warn" onclick="jumpFilter('appealing')">Проверка: <strong class="mono" id="stApp">0</strong></button>
+          <button class="stat-pill err" onclick="jumpFilter('action_required')">Огран: <strong class="mono" id="stAct">0</strong></button>
         </div>
       </div>
+
       <div class="top-right">
-        <div class="thread-bar" title="Глобальное число одновременных потоков для аудита, входа, снятия огранов, залива, буста и пакетных действий (1–15)">
-          <span class="thread-bar-lbl">⚡ Потоки</span>
-          <button type="button" class="tchip" data-gt="1" onclick="setGlobalThreads(1)">1</button>
-          <button type="button" class="tchip" data-gt="3" onclick="setGlobalThreads(3)">3</button>
-          <button type="button" class="tchip active" data-gt="5" onclick="setGlobalThreads(5)">5</button>
-          <button type="button" class="tchip" data-gt="8" onclick="setGlobalThreads(8)">8</button>
-          <button type="button" class="tchip" data-gt="10" onclick="setGlobalThreads(10)">10</button>
-          <input type="number" id="globalThreadsInput" class="thread-num-in" value="5" min="1" max="15" onchange="setGlobalThreads(this.value)" />
+        <div id="jobPill" class="job-pill hidden">
+          <span class="spin"></span>
+          <span id="jobText">Работает...</span>
         </div>
-        <label style="font-size:12px;color:var(--text-dim);display:flex;align-items:center;gap:6px;cursor:pointer;" title="По умолчанию апилятся только Account Updates (group=47/661), без постов в Studio">
-          <input type="checkbox" id="chkIncludeStudio" class="chk" />
-          <span>Также посты Studio</span>
-        </label>
-        <label style="font-size:12px;color:var(--text-dim);display:flex;align-items:center;gap:6px;cursor:pointer;">
-          <input type="checkbox" id="chkHideRejected" checked class="chk" />
-          <span>FAILED → Private</span>
-        </label>
-        <button class="btn" id="btnAuditAll" onclick="auditAll()">↻ HTTP-аудит (0$)</button>
-        <button class="btn btn-emerald" id="btnSettleAll" onclick="appealAll(true)" title="Ждёт до 4 мин пока прилетят все 0..10 огранов волны и снимает каждый">⏳ Дождаться волны (0..10)</button>
-        <button class="btn btn-primary" id="btnAppealAll" onclick="appealAll(false)">⚡ Снять все ограны</button>
+        <button class="btn btn-sm" id="btnTopAudit" onclick="auditAll()">↻ Аудит</button>
+        <button class="btn btn-sm btn-primary" id="btnTopAppeal" onclick="appealAll()">⚡ Снять ограны</button>
       </div>
     </header>
 
-    <div class="content">
-      <!-- LIVE MULTI-THREAD WORKERS MONITOR (auto-shows when any parallel job or unban queue is active) -->
-      <div id="activeJobsStrip" class="jobs-strip hidden"></div>
-
-      <!-- KPI STRIP -->
-      <section class="kpi-grid">
-        <div class="kpi" style="--kpi-accent:rgba(99,102,241,0.7)">
-          <div class="kpi-top"><span>Аккаунтов в пуле</span><span class="mono">FLEET</span></div>
-          <div class="kpi-val" id="kpiTotal">0</div>
-          <div class="kpi-sub" id="kpiAuthedSub">0 авторизовано</div>
-        </div>
-        <div class="kpi" style="--kpi-accent:rgba(16,185,129,0.75)">
-          <div class="kpi-top"><span>Рекомендации открыты</span><span style="color:var(--ok)">ELIGIBLE</span></div>
-          <div class="kpi-val" style="color:var(--ok)" id="kpiEligible">0</div>
-          <div class="kpi-sub">Чистые и разбаненные</div>
-        </div>
-        <div class="kpi" style="--kpi-accent:rgba(245,158,11,0.75)">
-          <div class="kpi-top"><span>На рассмотрении</span><span style="color:var(--warn)">APPEALING</span></div>
-          <div class="kpi-val" style="color:var(--warn)" id="kpiAppealing">0</div>
-          <div class="kpi-sub">Апелляция подана (до 24ч)</div>
-        </div>
-        <div class="kpi" style="--kpi-accent:rgba(244,63,94,0.75)">
-          <div class="kpi-top"><span>Активный огран</span><span style="color:var(--err)">ACTION</span></div>
-          <div class="kpi-val" style="color:var(--err)" id="kpiAction">0</div>
-          <div class="kpi-sub">Готовы к авто-снятию</div>
-        </div>
-        <div class="kpi" style="--kpi-accent:rgba(6,182,212,0.75)">
-          <div class="kpi-top"><span>Просмотры Studio</span><span style="color:var(--accent-2)">VIEWS</span></div>
-          <div class="kpi-val mono" id="kpiViews">0</div>
-          <div class="kpi-sub" id="kpiPostsSub">0 постов в Studio</div>
-        </div>
-      </section>
-
-      <!-- VIEW 1: FLEET & UNBAN -->
-      <section id="view-fleet">
+    <main class="content">
+      <!-- VIEW 1: ACCOUNTS (CLEAN TABLE) -->
+      <section id="view-accounts">
         <div class="toolbar">
-          <div class="search-wrap">
-            <span class="search-icon">🔍</span>
-            <input type="text" id="fleetSearch" placeholder="Поиск @handle, UID, email, кластер... (/)" oninput="renderFleet()" />
+          <div class="search-box">
+            <input type="text" id="accSearch" placeholder="Поиск @handle, email..." oninput="renderAccounts()" />
           </div>
-          <div class="filters">
-            <button class="chip active" onclick="setFilter('all', this)">Все</button>
-            <button class="chip" onclick="setFilter('eligible', this)">Eligible</button>
-            <button class="chip" onclick="setFilter('appealing', this)">Appealing</button>
-            <button class="chip" onclick="setFilter('action_required', this)">Активный огран</button>
-            <button class="chip" onclick="setFilter('unauth', this)">Без входа</button>
-            <select id="fleetSort" onchange="renderFleet()" style="width:auto;padding:5px 10px;font-size:12px;">
-              <option value="views_desc">Сорт: Просмотры ↓</option>
-              <option value="health">Сорт: Статус ограна</option>
-              <option value="name">Сорт: Имя A-Z</option>
-            </select>
-            <button class="btn btn-sm" id="btnViewMode" onclick="toggleViewMode()">☰ Таблица</button>
-            <button class="btn btn-sm" onclick="toggleSelectAll()">☑ Выбрать все</button>
-            <button class="btn btn-sm btn-emerald" onclick="copyAccountsExport('uploaded', 'lines')" title="Скопировать строки всех пролитых аккаунтов в буфер обмена">📋 Копировать пролитые</button>
-            <a class="btn btn-sm" href="/api/sessions/export/zip" style="text-decoration:none;">📦 Все ZIP</a>
-            <a class="btn btn-sm" href="/api/sessions/export/jsonl" style="text-decoration:none;">⬇ JSONL</a>
+          <div class="pills">
+            <button class="pill active" data-f="all" onclick="setFilter('all', this)">Все</button>
+            <button class="pill" data-f="eligible" onclick="setFilter('eligible', this)">Чистые</button>
+            <button class="pill" data-f="appealing" onclick="setFilter('appealing', this)">Проверка</button>
+            <button class="pill" data-f="action_required" onclick="setFilter('action_required', this)">Огран</button>
+            <button class="pill" data-f="unauth" onclick="setFilter('unauth', this)">Без входа</button>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <button class="btn btn-sm" onclick="copyAccounts('clean')" title="Скопировать чистые аккаунты">📋 Чистые</button>
+            <button class="btn btn-sm" onclick="copyAccounts('uploaded')" title="Скопировать пролитые аккаунты">📋 Пролитые</button>
+            <button class="btn btn-sm" onclick="toggleSelectAll()">☑ Все</button>
           </div>
         </div>
-        <!-- 4-Folder Auto-Appeal Sorting Strip -->
-        <div id="sortedFoldersBar" class="panel" style="margin-bottom:14px;padding:12px 14px;">
-          <div class="sec-title" style="margin-bottom:8px;">
-            <span>📁 Авто-сортировка аккаунтов по папкам (<code class="mono">state/sorted_accounts/</code>)</span>
-            <button class="btn btn-sm btn-ghost" onclick="loadSortedFolders()">↻ Обновить папки</button>
-          </div>
-          <div id="sortedFoldersGrid" style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;"></div>
-        </div>
-        <div id="fleetContainer"></div>
-      </section>
 
-      <!-- VIEW 2: IMPORT & OUTLOOK HUB -->
-      <section id="view-import" class="hidden">
-        <div class="grid-2">
-          <div class="panel">
-            <h3 style="font-size:15.5px;margin-bottom:6px;">Пакетный импорт строк (Outlook Hub + TOTP)</h3>
-            <p style="font-size:12px;color:var(--text-dim);margin-bottom:14px;">
-              Перетащи <code>.txt</code> файл или вставь строки обоих форматов вперемешку:
-              <code class="mono">user|pass|mail|TOTP[|proxy]</code> и
-              <code class="mono">login:pass:outlook:pass:rec:pass:2FA</code>
-            </p>
-            <div id="txtDropzone" class="dropzone" style="padding:14px;margin-bottom:12px;" onclick="document.getElementById('txtFileInput').click()">
-              <div style="font-size:12.5px;font-weight:600;">📄 Перетащи accounts.txt сюда или нажми для выбора файла</div>
-              <input type="file" id="txtFileInput" accept=".txt,.csv" class="hidden" onchange="loadTxtFile(event)" />
-            </div>
-            <div class="field">
-              <label>Строки аккаунтов</label>
-              <textarea id="impLines" oninput="scheduleLinePreview()" placeholder="user|pass|mail@gmail.com|BASE32TOTP&#10;login:pass:mail@outlook.com:mail_pass:rec@polosmail.com:rec_pass:HOTMAIL2FA"></textarea>
-            </div>
-            <div class="field">
-              <label>Пул прокси (по одному на строку — 1:1 привязка, либо оставь пустым для дефолтного: <span id="defProxyHint" class="mono"></span>)</label>
-              <textarea id="impProxies" style="min-height:72px;" oninput="scheduleLinePreview()" placeholder="socks5://user:pass@host:port&#10;ip:port:user:pass"></textarea>
-            </div>
-            <div class="grid-2" style="margin-bottom:12px;">
-              <div style="display:flex;flex-direction:column;gap:8px;">
-                <div class="field" style="margin:0;">
-                  <label>Целевой регион профиля</label>
-                  <select id="impRegion">
-                    <option value="US" selected>US — United States</option>
-                    <option value="DE">DE — Germany</option>
-                    <option value="GB">GB — United Kingdom</option>
-                  </select>
-                </div>
-                <div class="field" style="margin:0;">
-                  <label>⚡ Потоки входа и разбана (1–15)</label>
-                  <div style="display:flex;gap:5px;align-items:center;">
-                    <input type="number" id="impThreads" value="5" min="1" max="15" style="width:68px;padding:5px 8px;" />
-                    <button type="button" class="tchip" onclick="document.getElementById('impThreads').value='1'">1</button>
-                    <button type="button" class="tchip" onclick="document.getElementById('impThreads').value='3'">3</button>
-                    <button type="button" class="tchip" onclick="document.getElementById('impThreads').value='5'">5</button>
-                    <button type="button" class="tchip" onclick="document.getElementById('impThreads').value='8'">8</button>
-                  </div>
-                </div>
-              </div>
-              <div style="display:flex;flex-direction:column;justify-content:center;gap:6px;font-size:12px;">
-                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="impAutoLogin" checked class="chk" /> Авто-вход (Outlook Hub / TOTP)</label>
-                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="impAutoCleanPosts" class="chk" /> Удалить прошлые посты после входа</label>
-                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="impAutoAppeal" checked class="chk" /> Сразу снять ограны после входа</label>
-              </div>
-            </div>
-            <button class="btn btn-primary" style="width:100%;" onclick="submitBatchImport()">🚀 Импортировать и запустить конвейер</button>
-          </div>
-
-          <div style="display:flex;flex-direction:column;gap:14px;">
-            <div class="panel" style="flex:1;">
-              <div class="sec-title">
-                <span>Предпросмотр разбора строк</span>
-                <span class="badge b-cyan mono" id="previewCountBadge">0 валидных</span>
-              </div>
-              <div id="previewTableBox" style="max-height:285px;overflow-y:auto;font-size:12px;color:var(--muted);">
-                Вставь строки слева — парсер мгновенно проверит формат (TOTP / Outlook Hub), 2FA ключи и привязку прокси.
-              </div>
-            </div>
-
-            <div class="panel">
-              <div class="sec-title"><span>Импорт готовой папки сессий с диска</span></div>
-              <p style="font-size:12px;color:var(--text-dim);margin-bottom:10px;">
-                Подхватывает <code>kintaro_auth/sessions/*.json</code> и <code>233/sessions/&lt;user&gt;/cookies.json</code> без повторного входа.
-              </p>
-              <div class="field">
-                <input type="text" id="folderPathInput" placeholder="C:\kintaro\sessions или /path/to/sessions" />
-              </div>
-              <button class="btn" onclick="submitFolderImport()">📁 Импортировать сессии из папки</button>
-            </div>
-
-            <div class="panel">
-              <div class="sec-title"><span>Импорт сырых JSON / JSONL сессий (<code class="mono">x-device</code>)</span></div>
-              <div class="field">
-                <textarea id="rawSessInput" style="min-height:80px;" placeholder='Вставь JSON / JSONL с {"device": {...}} или готовый x-device объект...'></textarea>
-              </div>
-              <button class="btn btn-sm" onclick="submitRawSessionsImport()">📥 Импортировать JSON/JSONL</button>
-            </div>
-          </div>
+        <div class="table-wrap">
+          <table class="tbl">
+            <thead>
+              <tr>
+                <th style="width:36px;"></th>
+                <th>Аккаунт</th>
+                <th>Статус</th>
+                <th>Посты / Просм.</th>
+                <th>Гео / Прокси</th>
+                <th style="text-align:right;">Действия</th>
+              </tr>
+            </thead>
+            <tbody id="accountsTbody"></tbody>
+          </table>
         </div>
       </section>
 
-      <!-- VIEW 3: ANTI-SHADOWBAN CAMPAIGN & UPLOAD STUDIO v4.0 -->
+      <!-- VIEW 2: UPLOAD & CAMPAIGN (SIMPLE & CLEAN) -->
       <section id="view-upload" class="hidden">
         <div class="grid-2">
-          <div class="panel">
-            <div class="sec-title">
-              <span>🚀 Студия Анти-Тень Кампании (5 потоков · minimal_snow · 2048)</span>
-              <div style="display:flex;gap:6px;">
-                <select id="campPresetSelect" onchange="applySelectedPreset()" style="width:auto;padding:4px 8px;font-size:11.5px;"></select>
-                <button class="btn btn-sm" onclick="saveCurrentPreset()">💾 Пресет</button>
-                <button class="btn btn-sm" onclick="previewUniquifier()">👁 До / После</button>
-              </div>
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title">Новый залив</div>
+              <button class="btn btn-xs" onclick="previewUniquifier()">👁 Превью фото</button>
             </div>
-            <p style="font-size:12px;color:var(--text-dim);margin-bottom:10px;">
-              Объединённый конвейер без тени: уникальный рендер на каждый пост, рандомизация хэштегов, авто-музыка, холодный перезапуск TikTok каждые N постов и 3-этапный Auto-Appeal 2048.
-            </p>
+
             <div id="mediaDropzone" class="dropzone" onclick="document.getElementById('upFiles').click()">
-              <div style="font-size:24px;margin-bottom:6px;">🎬</div>
-              <div style="font-weight:600;font-size:13.5px;">Перетащи MP4 видео или 1–10 фото карусели</div>
-              <div style="font-size:11.5px;color:var(--muted);margin-top:4px;">MP4 &lt; 50 МБ · JPG / PNG &lt; 10 МБ на слайд</div>
-              <input type="file" id="upFiles" multiple accept=".mp4,.jpg,.jpeg,.png" class="hidden" onchange="handleMediaFiles(this.files)" />
+              <div style="font-size:22px;margin-bottom:4px;">🎬</div>
+              <div style="font-weight:600;">Перетащи видео MP4 или 1–10 фото</div>
+              <div class="muted" style="font-size:11.5px;margin-top:2px;">или нажми для выбора файлов</div>
+              <input type="file" id="upFiles" multiple accept=".mp4,.jpg,.jpeg,.png,.webp" class="hidden" onchange="handleMediaFiles(this.files)" />
             </div>
             <div id="mediaThumbs" class="thumbs"></div>
-            <div style="margin-top:8px;">
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                <span style="font-size:11.5px;color:var(--text-dim);">📂 Библиотека креативов на сервере (<code class="mono">state/media/</code> — клик чтобы выбрать):</span>
-                <div style="display:flex;gap:6px;">
-                  <button class="btn btn-sm btn-ghost" onclick="saveFilesToLibrary()">💾 В библиотеку</button>
-                  <button class="btn btn-sm btn-ghost" onclick="loadMediaLibrary()">↻</button>
-                </div>
-              </div>
-              <div id="serverMediaGrid" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
-            </div>
-            <div id="uniqPreviewBox" class="hidden" style="margin-top:10px;display:grid;grid-template-columns:1fr 1fr;gap:10px;"></div>
+            <div id="uniqPreviewBox" class="hidden" style="margin-top:10px;display:grid;grid-template-columns:1fr 1fr;gap:8px;"></div>
 
             <div class="field" style="margin-top:12px;">
-              <label>Описание и хэштеги (спинтакс <code>{А|Б}</code> + <code>{RAND4}</code> + <code>@mentions</code>)</label>
-              <input type="text" id="upDesc" oninput="scheduleSpintaxPreview()" value="#piratetoken #piratetokenshop #blackknight #pirateshop #fyp" placeholder="{Check this out|Wait till the end} #fyp" />
+              <label>Описание и хэштеги</label>
+              <input type="text" id="upDesc" placeholder="#fyp #viral {Вариант А|Вариант Б}" value="#piratetoken #piratetokenshop #blackknight #pirateshop #fyp" />
             </div>
-            <div id="spintaxBox" style="margin-bottom:10px;display:flex;flex-direction:column;gap:5px;"></div>
 
-            <div class="grid-2" style="margin-bottom:10px;">
+            <div class="row-3" style="margin-bottom:12px;">
               <div class="field" style="margin:0;">
-                <label>Пресет фото-уникализатора</label>
+                <label>Постов / акк</label>
+                <input type="number" id="upCopies" value="6" min="1" max="30" />
+              </div>
+              <div class="field" style="margin:0;">
+                <label>Потоков</label>
+                <input type="number" id="upThreads" value="5" min="1" max="20" />
+              </div>
+              <div class="field" style="margin:0;">
+                <label>Уникализация</label>
                 <select id="upPhotoMode">
-                  <option value="minimal_snow" selected>❄️ minimal_snow (US FYP · 115–175 снеж.)</option>
-                  <option value="minimal">✨ minimal (лёгкий снег 45–85)</option>
-                  <option value="stealth">🕵️ stealth (без снега · перспектива + шум)</option>
-                  <option value="medium">⚖️ medium (140–240 + ветер)</option>
-                  <option value="boosted">❄️ boosted (330–510 + боке)</option>
-                  <option value="ultra_hard">🔥 ultra_hard (3D-карточка + Hue + фон)</option>
-                  <option value="off">⛔ off (без уникализации)</option>
+                  <option value="anti_unoriginal" selected>anti_unoriginal (без UNORIGINAL_NR)</option>
+                  <option value="minimal_snow">minimal_snow</option>
+                  <option value="minimal">minimal</option>
+                  <option value="stealth">stealth</option>
+                  <option value="medium">medium</option>
+                  <option value="boosted">boosted</option>
+                  <option value="ultra_hard">ultra_hard</option>
+                  <option value="off">Выкл</option>
                 </select>
               </div>
-              <div class="field" style="margin:0;">
-                <label>Авто-музыка TikTok (пул треков)</label>
-                <input type="text" id="upMusic" value="Fortnite" placeholder="Fortnite, phonk..." />
-              </div>
             </div>
 
-            <div class="grid-2" style="margin-bottom:10px;">
-              <div style="display:grid;grid-template-columns:1.25fr 0.9fr 0.9fr;gap:8px;">
-                <div class="field" style="margin:0;">
-                  <label>⚡ Потоки</label>
-                  <input type="number" id="upThreads" value="5" min="1" max="20" oninput="updateCampaignBtnLabel()" />
-                  <div class="tchip-row">
-                    <button type="button" class="tchip" onclick="setCampThreads(1)">1</button>
-                    <button type="button" class="tchip" onclick="setCampThreads(3)">3</button>
-                    <button type="button" class="tchip" onclick="setCampThreads(5)">5</button>
-                    <button type="button" class="tchip" onclick="setCampThreads(8)">8</button>
-                    <button type="button" class="tchip" onclick="setCampThreads(10)">10</button>
+            <label class="toggle-row">
+              <span>🗑 Удалить прошлые посты перед заливом</span>
+              <input type="checkbox" id="upDelOld" checked class="chk" />
+            </label>
+            <label class="toggle-row">
+              <span>⚡ Снять ограны 2048 (до / между / после)</span>
+              <input type="checkbox" id="upAutoAppeal" checked class="chk" />
+            </label>
+            <label class="toggle-row" title="Аккаунт сразу уходит в очередь дожима, а поток залива не простаивает 60с и берёт следующий">
+              <span>🔄 Дожимать волны 2048 в отдельных потоках</span>
+              <input type="checkbox" id="upDeferUnban" checked class="chk" />
+            </label>
+
+            <details class="adv">
+              <summary>Доп. настройки (музыка, паузы, регион, рестарт, повтор)</summary>
+              <div class="adv-body">
+                <div class="row-2" style="margin-top:8px;">
+                  <div class="field">
+                    <label>Авто-музыка (поиск)</label>
+                    <input type="text" id="upMusic" value="Fortnite" placeholder="Пусто = без музыки" />
+                  </div>
+                  <div class="field">
+                    <label>Регион залива</label>
+                    <input type="text" id="upRegion" value="US" maxlength="2" />
                   </div>
                 </div>
-                <div class="field" style="margin:0;"><label>Постов</label><input type="number" id="upCopies" value="6" min="1" max="30" oninput="updateCampaignBtnLabel()" /></div>
-                <div class="field" style="margin:0;"><label>Рестарт N</label><input type="number" id="upRestartN" value="3" min="0" max="20" /></div>
-              </div>
-              <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
-                <div class="field" style="margin:0;"><label>Пауза мин</label><input type="number" id="upDelayMin" value="14" min="0" /></div>
-                <div class="field" style="margin:0;"><label>Пауза макс</label><input type="number" id="upDelayMax" value="20" min="0" /></div>
-                <div class="field" style="margin:0;"><label>Регион</label><input type="text" id="upRegion" value="US" maxlength="2" /></div>
-              </div>
-            </div>
-
-            <div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:10px;font-size:12px;">
-              <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" id="upRandTags" checked class="chk" /> Рандом тегов</label>
-              <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" id="upDelOld" checked class="chk" /> Удалить старые</label>
-              <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" id="upAutoAppeal" checked class="chk" /> 3-этапный Auto-Appeal 2048 (60с)</label>
-              <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" id="upStickyProxy" class="chk" /> Sticky bpproxy</label>
-            </div>
-
-            <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;padding:9px 11px;margin-bottom:12px;border-radius:10px;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.25);font-size:12px;">
-              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;" title="После залива аккаунт сразу передаётся в отдельную очередь «⚡ Снятие огранов», а поток залива не ждёт 60с и сразу берёт следующий аккаунт">
-                <input type="checkbox" id="upDeferUnban" checked class="chk" />
-                <span><strong>🔄 Дожимать волны 2048 в отдельных потоках</strong> (не тормозить залив)</span>
-              </label>
-              <label style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--text-dim);">
-                <span>Потоков дожима:</span>
-                <input type="number" id="upAppealQueueThreads" value="3" min="1" max="15" style="width:56px;padding:3px 6px;font-size:12px;" />
-              </label>
-            </div>
-
-            <div style="display:flex;gap:8px;">
-              <button class="btn btn-primary" id="btnRunCampaign" style="flex:1;" onclick="submitCampaign()">🚀 Запустить 5-поточную кампанию (6× + 2048)</button>
-              <button class="btn" id="btnUpload" onclick="submitUpload()" title="Быстрый одиночный залив 1 поста">📤 1 пост</button>
-            </div>
-            <input type="checkbox" id="upSkipWarmup" class="hidden" />
-            <input type="checkbox" id="upForceCooldown" checked class="hidden" />
-          </div>
-
-          <div style="display:flex;flex-direction:column;gap:14px;">
-            <div class="panel">
-              <div class="sec-title">
-                <span>Выбор аккаунтов для кампании</span>
-                <button class="btn btn-sm" onclick="toggleAllUploadTargets()">Выбрать всех</button>
-              </div>
-              <p style="font-size:12px;color:var(--text-dim);margin-bottom:10px;">
-                Отметь нужные аккаунты или оставь пустым (кампания пойдёт по всему флоту в выбранное число потоков).
-              </p>
-              <div id="uploadTargetsList" style="display:flex;flex-direction:column;gap:8px;max-height:270px;overflow-y:auto;"></div>
-            </div>
-
-            <div class="panel" id="uploadedCopyPanel">
-              <div class="sec-title" style="margin-bottom:8px;">
-                <span>📋 Пролитые аккаунты (копирование в 1 клик)</span>
-                <div style="display:flex;align-items:center;gap:6px;">
-                  <span class="badge b-ok mono" id="uploadedCountBadge">0 акк.</span>
-                  <button class="btn btn-sm btn-ghost" onclick="loadUploadedCopyPreview()">↻</button>
+                <div class="row-3">
+                  <div class="field" style="margin:0;">
+                    <label>Пауза мин (с)</label>
+                    <input type="number" id="upDelayMin" value="14" min="0" />
+                  </div>
+                  <div class="field" style="margin:0;">
+                    <label>Пауза макс (с)</label>
+                    <input type="number" id="upDelayMax" value="20" min="0" />
+                  </div>
+                  <div class="field" style="margin:0;">
+                    <label>Рестарт ТТ (N)</label>
+                    <input type="number" id="upRestartN" value="3" min="0" max="20" />
+                  </div>
+                </div>
+                <div class="row-2" style="margin-top:8px;">
+                  <div class="field" style="margin:0;">
+                    <label>Потоков дожима 2048</label>
+                    <input type="number" id="upQueueThreads" value="3" min="1" max="15" />
+                  </div>
+                  <div class="field" style="margin:0;">
+                    <label>Повтор поздних волн (мин, 0=выкл)</label>
+                    <input type="number" id="upDelayedRecheck" value="12" min="0" max="120" />
+                  </div>
+                </div>
+                <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;font-size:12px;">
+                  <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="upRandTags" checked class="chk" /> Перемешивать хэштеги</label>
+                  <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="upStickyProxy" class="chk" /> Sticky bpproxy</label>
                 </div>
               </div>
-              <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
-                <button class="btn btn-sm btn-emerald" onclick="copyAccountsExport('uploaded', 'lines')">📋 Строки (login:pass:...)</button>
-                <button class="btn btn-sm" onclick="copyAccountsExport('uploaded', 'usernames')">📋 @Логины</button>
-                <button class="btn btn-sm" onclick="copyAccountsExport('uploaded', 'urls')">📋 Ссылки постов</button>
-                <button class="btn btn-sm" onclick="copyAccountsExport('clean', 'lines')">✅ Только clean</button>
-                <button class="btn btn-sm" onclick="copyAccountsExport('uploaded', 'summary')">📊 Сводка</button>
-                <button class="btn btn-sm btn-primary" onclick="sendUploadedToUnbanQueue()" title="Запустить отдельный дожим волн 2048 по всем пролитым">⚡ Дожать ограны</button>
-              </div>
-              <textarea id="uploadedCopyPreview" readonly class="mono" style="min-height:115px;font-size:11px;white-space:pre;overflow-x:auto;" placeholder="Здесь появятся строки всех пролитых аккаунтов (из последней кампании и истории заливов) — можно скопировать одной кнопкой выше."></textarea>
-              <div id="uploadedAccountsMiniList" style="margin-top:8px;max-height:145px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;"></div>
+            </details>
+
+            <div style="display:flex;gap:8px;margin-top:4px;">
+              <button class="btn btn-primary btn-lg" id="btnRunCampaign" style="flex:1;" onclick="submitCampaign()">🚀 Запустить залив</button>
+              <button class="btn btn-lg" id="btnQuick1" onclick="submitSingleUpload()" title="Быстрый одиночный пост (1 копия)">1 пост</button>
             </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title">Аккаунты <span class="muted mono" id="upPickStat" style="font-weight:400;font-size:12px;">(все)</span></div>
+              <div class="pills">
+                <button class="btn btn-xs" onclick="pickUploadSet('all')">Все</button>
+                <button class="btn btn-xs" onclick="pickUploadSet('clean')">Чистые</button>
+                <button class="btn btn-xs" onclick="pickUploadSet('unauth')">Без входа</button>
+                <button class="btn btn-xs btn-ghost" onclick="pickUploadSet('none')">Сброс</button>
+              </div>
+            </div>
+            <div class="field" style="margin-bottom:8px;">
+              <input type="text" id="upAccFilter" placeholder="Фильтр аккаунтов..." oninput="renderUploadPicker()" />
+            </div>
+            <div id="uploadPickList" class="pick-list"></div>
           </div>
         </div>
       </section>
 
-      <!-- VIEW 3B: STANDALONE MULTI-THREAD / TRAILING-THREAD 2048 UNBAN WAVE QUEUE -->
+      <!-- VIEW 3: UNBAN 2048 QUEUE (CLEAN & SIMPLE) -->
       <section id="view-unban" class="hidden">
-        <div class="grid-2" style="margin-bottom:14px;">
-          <div class="panel">
-            <div class="sec-title">
-              <span>⚡ Очередь снятия огранов 2048 (дожим всех волн 0..16+)</span>
-              <span class="badge b-cyan mono" id="unbanStatusBadge">ОЖИДАНИЕ</span>
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title">Снятие огранов 2048</div>
+              <span class="badge b-dim mono" id="unbanStatusBadge">Ожидание</span>
             </div>
-            <p style="font-size:12px;color:var(--text-dim);margin-bottom:12px;">
-              Отдельный конвейер снятия ограничений Account Updates: может работать <strong>последовательно (1 поток)</strong> или в <strong>несколько потоков дожима (3–10)</strong>, выжидая окно тишины по каждой волне и автоматически раскладывая аккаунты по папкам <code>clean / ogran_na_proverke / ogran_ne_snyat</code>.
-            </p>
 
-            <div class="grid-2" style="margin-bottom:10px;">
-              <div class="field" style="margin:0;">
-                <label>Кого отправить на снятие огранов</label>
-                <select id="unbanScope" onchange="renderUnbanPicker()">
-                  <option value="uploaded" selected>🚀 Пролитые аккаунты (последняя кампания / с постами)</option>
-                  <option value="selected">☑ Отмеченные вручную ниже (или во флоте)</option>
-                  <option value="restricted">🚨 С активными огранами / на проверке</option>
-                  <option value="all">🌐 Все авторизованные аккаунты</option>
+            <div class="field">
+              <label>Кого обработать</label>
+              <select id="unbanScope">
+                <option value="all">Все авторизованные аккаунты</option>
+                <option value="restricted">Только с активным ограном / проверкой</option>
+                <option value="uploaded">Только пролитые (последняя кампания)</option>
+                <option value="selected">Выбранные в списке справа</option>
+              </select>
+            </div>
+
+            <div class="row-3">
+              <div class="field">
+                <label>Потоков</label>
+                <select id="unbanThreads">
+                  <option value="1">1 (последовательно)</option>
+                  <option value="3" selected>3 потока</option>
+                  <option value="5">5 потоков</option>
+                  <option value="8">8 потоков</option>
+                  <option value="10">10 потоков</option>
                 </select>
               </div>
-              <div class="field" style="margin:0;">
-                <label>Потоки (1 = последовательно, 3–10 = параллельно)</label>
-                <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;">
-                  <input type="number" id="unbanThreads" value="3" min="1" max="15" style="width:68px;padding:5px 8px;" />
-                  <button class="tchip" type="button" onclick="setUnbanThreads(1)" title="Строго по очереди: 1 аккаунт за другим">1 (послед.)</button>
-                  <button class="tchip" type="button" onclick="setUnbanThreads(3)">3</button>
-                  <button class="tchip" type="button" onclick="setUnbanThreads(5)">5</button>
-                  <button class="tchip" type="button" onclick="setUnbanThreads(8)">8</button>
-                  <button class="tchip" type="button" onclick="setUnbanThreads(10)">10</button>
-                </div>
+              <div class="field">
+                <label>Тишина волны (сек)</label>
+                <input type="number" id="unbanQuiet" value="60" min="0" max="180" />
+              </div>
+              <div class="field">
+                <label title="Повторная проверка поздних волн 2048 + Studio через N минут (0 = выкл)">Повтор (мин)</label>
+                <input type="number" id="unbanRecheckMin" value="12" min="0" max="120" />
               </div>
             </div>
 
-            <div class="grid-2" style="margin-bottom:10px;">
-              <div class="field" style="margin:0;">
-                <label>Окно тишины после последней волны (сек)</label>
-                <input type="number" id="unbanQuietSec" value="60" min="0" max="300" />
-              </div>
-              <div class="field" style="margin:0;">
-                <label>Макс. ожидание на 1 аккаунт (сек)</label>
-                <input type="number" id="unbanMaxWaitSec" value="240" min="15" max="600" />
-              </div>
+            <label class="toggle-row">
+              <span>⏳ Дождаться всех волн (0..10+ огранов)</span>
+              <input type="checkbox" id="unbanSettle" checked class="chk" />
+            </label>
+            <label class="toggle-row">
+              <span>🛡 Только Account updates (без постов Studio)</span>
+              <input type="checkbox" id="unbanOnly2048" checked class="chk" />
+            </label>
+
+            <div style="display:flex;gap:8px;margin-top:12px;">
+              <button class="btn btn-primary btn-lg" style="flex:1;" onclick="startUnbanQueue()">⚡ Запустить снятие</button>
+              <button class="btn btn-err btn-lg" onclick="stopUnbanQueue()">Стоп</button>
             </div>
 
-            <div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:12px;font-size:12px;">
-              <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" id="unbanWaitSettle" checked class="chk" /> ⏳ Дожидаться всех волн (0..16+)</label>
-              <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" id="unbanOnly2048" checked class="chk" /> Только 2048 (Account Ineligible)</label>
-              <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" id="unbanIncludeStudio" class="chk" /> Также посты Studio</label>
-              <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" id="unbanHideRejected" checked class="chk" /> FAILED → Private</label>
-              <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" id="unbanSortFolders" checked class="chk" /> Сортировать по папкам</label>
-            </div>
-
-            <div style="display:flex;flex-wrap:wrap;gap:8px;">
-              <button class="btn btn-emerald" id="btnStartUnbanQueue" style="flex:1;" onclick="startUnbanQueue()">▶ Запустить снятие огранов</button>
-              <button class="btn btn-rose" id="btnStopUnbanQueue" onclick="stopUnbanQueue()">⏹ Стоп</button>
-              <button class="btn btn-sm" onclick="clearUnbanQueueFinished()" title="Очистить завершённые строки из таблицы">🧹 Очистить</button>
-            </div>
+            <div id="unbanQueueBox" style="margin-top:14px;"></div>
           </div>
 
-          <div class="panel">
-            <div class="sec-title">
-              <span>Выбор аккаунтов и быстрое копирование результатов</span>
-              <button class="btn btn-sm" onclick="toggleAllUnbanTargets()">Выбрать все</button>
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title">Результаты и выбор</div>
+              <button class="btn btn-xs" onclick="toggleAllUnbanPick()">Все</button>
             </div>
-            <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
-              <button class="btn btn-sm btn-emerald" onclick="copyAccountsExport('clean', 'lines')">📋 Копировать чистые (clean)</button>
-              <button class="btn btn-sm" onclick="copyAccountsExport('uploaded', 'lines')">📋 Копировать пролитые</button>
-              <button class="btn btn-sm" onclick="copyAccountsExport('ogran_na_proverke', 'lines')">⏳ На проверке</button>
-              <button class="btn btn-sm" onclick="copyAccountsExport('ogran_ne_snyat', 'lines')">🚨 Не снят</button>
-            </div>
-            <div id="unbanPickerList" style="display:flex;flex-direction:column;gap:6px;max-height:245px;overflow-y:auto;"></div>
-          </div>
-        </div>
 
-        <div class="panel">
-          <div class="sec-title" style="margin-bottom:10px;">
-            <span>📡 Живой статус очереди снятия огранов 2048</span>
-            <div id="unbanKpiStrip" style="display:flex;flex-wrap:wrap;gap:6px;font-size:11.5px;"></div>
-          </div>
-          <div id="unbanQueueTableBox" style="overflow-x:auto;font-size:12px;color:var(--text-dim);">
-            Очередь пуста. Выбери режим сверху и нажми «▶ Запустить снятие огранов» — либо запусти массовый залив с опцией дожима в отдельных потоках.
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;">
+              <button class="btn btn-sm btn-ok" onclick="copyAccounts('clean')">📋 Чистые</button>
+              <button class="btn btn-sm btn-warn" onclick="copyAccounts('ogran_na_proverke')">📋 Проверка</button>
+              <button class="btn btn-sm btn-err" onclick="copyAccounts('ogran_ne_snyat')">📋 Не снят</button>
+              <button class="btn btn-sm" onclick="copyAccounts('uploaded')">📋 Пролитые</button>
+              <button class="btn btn-sm" onclick="copyAccounts('uploaded', 'usernames')">📋 @Юзы</button>
+            </div>
+
+            <div id="unbanPickList" class="pick-list"></div>
           </div>
         </div>
       </section>
 
-      <!-- VIEW 3C: PRO SHADOWBAN & MODERATION CHECKER -->
-      <section id="view-shadow" class="hidden">
-        <div class="grid-2" style="margin-bottom:14px;">
-          <div class="panel">
-            <div class="sec-title">
-              <span>👁 Чекер Тени и Модерации (FYP · is_nff_or_nr · risk_sink · 2048)</span>
-              <span class="badge b-cyan mono">PRO</span>
+      <!-- VIEW 4: IMPORT (CLEAN 2-STEP) -->
+      <section id="view-import" class="hidden">
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title">Импорт аккаунтов</div>
+              <button class="btn btn-xs" onclick="document.getElementById('txtFileInput').click()">📄 Загрузить .txt</button>
+              <input type="file" id="txtFileInput" accept=".txt,.csv" class="hidden" onchange="loadTxtFile(event)" />
             </div>
-            <p style="font-size:12px;color:var(--text-dim);margin-bottom:10px;">
-              Проверяет пачку любых <code>@username</code>, ссылок или строк аккаунтов в <strong>N потоков</strong>: вытаскивает реальные внутренние флаги TikTok (<code>is_nff_or_nr</code>, <code>risk_sink</code>, <code>in_reviewing</code>, <code>self_see</code>, <code>is_prohibited</code>), сравнивает публичные посты со своими и проверяет ограны 2048.
-            </p>
-            <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">
-              <button type="button" class="btn btn-sm btn-emerald" onclick="fillShadowUsernames('uploaded')">🚀 Подставить пролитые</button>
-              <button type="button" class="btn btn-sm" onclick="fillShadowUsernames('selected')">☑ Выбранные во флоте</button>
-              <button type="button" class="btn btn-sm" onclick="fillShadowUsernames('all')">🌐 Весь флот</button>
-              <button type="button" class="btn btn-sm btn-ghost" onclick="document.getElementById('shadowUsernamesInput').value=''">✕ Очистить</button>
+
+            <div class="field">
+              <label>Строки аккаунтов (<code class="mono">login:pass:outlook:...</code> или <code class="mono">user|pass|mail|TOTP</code>)</label>
+              <textarea id="impLines" style="min-height:160px;" oninput="scheduleLinePreview()" placeholder="Вставь список аккаунтов по одному на строку..."></textarea>
             </div>
-            <div class="field" style="margin-bottom:10px;">
-              <label>Аккаунты для проверки (по одному на строку: <code>@username</code>, ссылка <code>tiktok.com/@...</code> или строка <code>login:pass:...</code>)</label>
-              <textarea id="shadowUsernamesInput" style="min-height:110px;" placeholder="@demo_account_1&#10;@demo_account_2&#10;https://www.tiktok.com/@example"></textarea>
+
+            <div class="field">
+              <label>Прокси (оставь пустым для дефолтного: <span id="defProxyHint" class="mono">—</span>)</label>
+              <textarea id="impProxies" style="min-height:60px;" oninput="scheduleLinePreview()" placeholder="socks5://user:pass@host:port"></textarea>
             </div>
-            <div class="grid-2" style="margin-bottom:10px;">
+
+            <div class="row-2" style="margin-bottom:10px;">
               <div class="field" style="margin:0;">
-                <label>⚡ Потоки проверки (1–15)</label>
-                <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;">
-                  <input type="number" id="shadowThreads" value="5" min="1" max="15" style="width:64px;padding:5px 8px;" />
-                  <button type="button" class="tchip" onclick="document.getElementById('shadowThreads').value='1'">1</button>
-                  <button type="button" class="tchip" onclick="document.getElementById('shadowThreads').value='3'">3</button>
-                  <button type="button" class="tchip" onclick="document.getElementById('shadowThreads').value='5'">5</button>
-                  <button type="button" class="tchip" onclick="document.getElementById('shadowThreads').value='8'">8</button>
-                  <button type="button" class="tchip" onclick="document.getElementById('shadowThreads').value='10'">10</button>
-                </div>
+                <label>Регион</label>
+                <select id="impRegion">
+                  <option value="US" selected>US</option>
+                  <option value="DE">DE</option>
+                  <option value="GB">GB</option>
+                </select>
               </div>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-                <div class="field" style="margin:0;"><label>Постов/акк</label><input type="number" id="shadowMaxPosts" value="12" min="1" max="35" /></div>
-                <div class="field" style="margin:0;"><label>Порог 0 просм. (мин)</label><input type="number" id="shadowZeroMin" value="20" min="1" max="240" /></div>
+              <div style="display:flex;flex-direction:column;justify-content:center;gap:5px;font-size:12.5px;">
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="impAutoLogin" checked class="chk" /> Авто-вход (Outlook/TOTP)</label>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="impAutoClean" class="chk" /> Удалить прошлые посты</label>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="impAutoAppeal" checked class="chk" /> Снять ограны</label>
               </div>
             </div>
-            <div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:12px;font-size:12px;">
-              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;" title="Для аккаунтов из твоей базы дополнительно проверяет скрытые из публички посты, TikTok Studio и Account Updates 2048">
-                <input type="checkbox" id="shadowDeepAudit" checked class="chk" />
-                <span>🛡️ Глубокий чек своих акков (2048 + Studio + скрытые из публички)</span>
-              </label>
-            </div>
-            <button class="btn btn-primary" id="btnRunShadowChecker" style="width:100%;" onclick="runProShadowChecker()">🔍 Проверить на тень и модерацию</button>
-          </div>
 
-          <div class="panel">
-            <div class="sec-title">
-              <span>Сводка чекера и копирование в 1 клик</span>
-              <span class="mono" style="font-size:11px;color:var(--muted);" id="shadowSummaryMeta">—</span>
-            </div>
-            <div id="shadowSummaryKpi" style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:12px;">
-              <div class="tele-box"><div class="tele-lbl">Без тени</div><div class="mono" style="font-size:20px;font-weight:700;color:var(--ok);" id="shKpiClean">0</div></div>
-              <div class="tele-box"><div class="tele-lbl">Частичная</div><div class="mono" style="font-size:20px;font-weight:700;color:var(--warn);" id="shKpiPartial">0</div></div>
-              <div class="tele-box"><div class="tele-lbl">В тени</div><div class="mono" style="font-size:20px;font-weight:700;color:var(--err);" id="shKpiShadow">0</div></div>
-              <div class="tele-box"><div class="tele-lbl">Просмотры</div><div class="mono" style="font-size:20px;font-weight:700;color:var(--accent-2);" id="shKpiViews">0</div></div>
-            </div>
-            <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">
-              <button class="btn btn-sm btn-emerald" onclick="copyShadowResults('clean', 'lines')">📋 Без тени (строки)</button>
-              <button class="btn btn-sm" onclick="copyShadowResults('clean', 'usernames')">📋 Без тени (@юзы)</button>
-              <button class="btn btn-sm btn-rose" onclick="copyShadowResults('shadow', 'lines')">📋 В тени / Проблемные</button>
-              <button class="btn btn-sm" onclick="copyShadowResults('all', 'telegram')">📨 Telegram-отчёт (как KURDY)</button>
-              <button class="btn btn-sm btn-primary" onclick="sendShadowFlaggedToUnban()" title="Отправить проблемные свои аккаунты в очередь снятия огранов 2048">⚡ Снять ограны с проблемных</button>
-            </div>
-            <div style="font-size:11.5px;color:var(--text-dim);line-height:1.55;padding:10px 12px;border-radius:10px;background:rgba(8,11,19,0.7);border:1px solid var(--border);">
-              <strong>Как определяется тень (без гадания):</strong><br/>
-              • <code class="mono">is_nff_or_nr = true</code> — официальный флаг TikTok <em>Not For Feed / Not Recommended</em>.<br/>
-              • <code class="mono">risk_infos.risk_sink = true</code> — понижение поста в выдаче FYP.<br/>
-              • <code class="mono">status.in_reviewing / self_see / is_prohibited / allow_share</code> — статус модерации.<br/>
-              • <strong>Diff публички vs владельца:</strong> посты, которые видишь ты, но скрыты от всех в <code>/user/posts</code>.<br/>
-              • <strong>Account Updates 2048 + Studio:</strong> активные ограничения на рекомендации аккаунта.
-            </div>
-          </div>
-        </div>
-
-        <div class="panel">
-          <div class="sec-title" style="margin-bottom:10px;">
-            <span>📋 Результаты проверки по аккаунтам и постам</span>
-            <div style="display:flex;gap:6px;flex-wrap:wrap;" id="shadowFilterChips">
-              <button class="chip active" onclick="setShadowFilter('all', this)">Все</button>
-              <button class="chip" onclick="setShadowFilter('clean', this)">✅ Без тени</button>
-              <button class="chip" onclick="setShadowFilter('partial_shadow', this)">⚠️ Частичная</button>
-              <button class="chip" onclick="setShadowFilter('shadowbanned', this)">🚨 В тени</button>
-              <button class="chip" onclick="setShadowFilter('no_public_posts', this)">💊 Нет постов</button>
-            </div>
-          </div>
-          <div id="shadowCheckerResults" style="display:flex;flex-direction:column;gap:12px;">
-            <div style="color:var(--muted);font-size:12px;">Нажми «🚀 Подставить пролитые» и «🔍 Проверить на тень и модерацию» — результат появится здесь.</div>
-          </div>
-        </div>
-      </section>
-
-      <!-- VIEW 4: SPY & TOP-COMMENT PINNING + LIVE TOTP -->
-      <section id="view-spy" class="hidden">
-        <div class="grid-2" style="margin-bottom:16px;">
-          <div class="panel">
-            <div class="sec-title"><span>🕵️ Competitor Spy & Клонер без водянок</span></div>
-            <p style="font-size:12px;color:var(--text-dim);margin-bottom:10px;">
-              Вставь <code>@username</code> конкурента или прямую ссылку на пост TikTok — достанет просмотры, топ хэштеги, вирусные Music ID и позволит в 1 клик склонировать слайды/MP4 без водянок в <code>state/media/</code>.
-            </p>
-            <div style="display:flex;gap:8px;margin-bottom:10px;">
-              <input type="text" id="spyUserInput" placeholder="@username или ссылка https://www.tiktok.com/@.../photo/..." />
-              <button class="btn btn-sm btn-primary" id="btnSpy" onclick="runCompetitorSpy()">Сканировать</button>
-            </div>
-            <div id="spyResultBox" style="font-size:12px;color:var(--text-dim);max-height:420px;overflow-y:auto;">
-              Результаты анализа появятся здесь.
-            </div>
+            <button class="btn btn-primary btn-lg" style="width:100%;" onclick="submitBatchImport()">📥 Импортировать и запустить</button>
           </div>
 
           <div style="display:flex;flex-direction:column;gap:14px;">
-            <div class="panel">
-              <div class="sec-title"><span>💬 Вывод комментария в ТОП #1</span></div>
-              <div class="field"><label>Ссылка на пост или AWEME ID</label><input type="text" id="cmtPostInput" placeholder="https://www.tiktok.com/@user/photo/7712..." /></div>
-              <div class="grid-2" style="margin-bottom:8px;">
-                <div class="field" style="margin:0;"><label>Аккаунт автора (или пусто если CID)</label><select id="cmtSeedAccount"></select></div>
-                <div class="field" style="margin:0;"><label>Существующий CID (опц.)</label><input type="text" id="cmtExistingCid" placeholder="Оставь пустым для нового" /></div>
+            <div class="card">
+              <div class="card-head">
+                <div class="card-title">Проверка строк</div>
+                <span class="badge b-cyan mono" id="previewBadge">0</span>
               </div>
-              <div class="field"><label>Текст главного комментария (спинтакс + @mentions)</label><input type="text" id="cmtLeadText" placeholder="{Check this on FORTCHEST.CC|Just tried this and it worked!}" /></div>
-              <div class="field"><label>Шаблоны ответов от ботов (по одному на строку, опц.)</label><textarea id="cmtReplies" style="min-height:56px;" placeholder="fr it actually worked&#10;ty bro!"></textarea></div>
-              <div style="display:flex;gap:8px;align-items:center;">
-                <input type="number" id="cmtThreads" value="5" min="1" max="15" class="thread-num-in" title="Потоки буста комментов" />
-                <button class="btn btn-primary" id="btnBoostCmt" style="flex:1;" onclick="submitCommentBoost()">💬 Опубликовать и забустить в ТОП</button>
-                <button class="btn btn-sm" onclick="loadPostComments()">📋 Комменты поста</button>
+              <div id="previewBox" class="muted" style="max-height:280px;overflow-y:auto;font-size:12px;">
+                Вставь строки слева — покажу результат разбора.
               </div>
-              <div id="cmtResultBox" style="margin-top:8px;font-size:12px;color:var(--text-dim);"></div>
             </div>
 
-            <div class="panel">
-              <div class="sec-title"><span>🔐 Живой TOTP 2FA генератор (для ручного входа)</span></div>
-              <div style="display:flex;gap:8px;margin-bottom:8px;">
-                <input type="text" id="totpSecretInput" placeholder="Base32 2FA ключ (16–32 симв.)" />
-                <button class="btn btn-sm btn-emerald" onclick="generateTotpUi()">Получить код</button>
+            <details class="adv" style="margin:0;background:var(--surface);">
+              <summary>Импорт готовой папки сессий (.json / cookies.json)</summary>
+              <div class="adv-body" style="padding-top:10px;">
+                <div style="display:flex;gap:8px;">
+                  <input type="text" id="folderPathInput" placeholder="/path/to/sessions" />
+                  <button class="btn btn-sm" onclick="submitFolderImport()">Импорт</button>
+                </div>
               </div>
-              <div id="totpResultBox" class="mono" style="font-size:20px;font-weight:700;color:var(--accent-2);">—</div>
-            </div>
+            </details>
           </div>
         </div>
       </section>
 
-      <!-- VIEW 5: ENGAGEMENT BOOST & BULK PROFILE BRANDING -->
+      <!-- VIEW 5: TOOLS & SETTINGS (COMPACT SUB-TABS) -->
       <section id="view-tools" class="hidden">
-        <div class="grid-2">
-          <div class="panel">
-            <div class="sec-title"><span>🔥 Взаимный Буст поста / профиля (со всех авторизованных)</span></div>
-            <div class="field"><label>Ссылка на пост или AWEME ID</label><input type="text" id="boostPostInput" placeholder="https://www.tiktok.com/@user/video/..." /></div>
-            <div class="field"><label>Подписаться на @username (опц.)</label><input type="text" id="boostUserInput" placeholder="@target_handle" /></div>
-            <div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:10px;font-size:12px;">
-              <label style="display:flex;align-items:center;gap:5px;"><input type="checkbox" id="boostView" checked class="chk" /> Просмотр</label>
-              <label style="display:flex;align-items:center;gap:5px;"><input type="checkbox" id="boostLike" checked class="chk" /> Лайк</label>
-              <label style="display:flex;align-items:center;gap:5px;"><input type="checkbox" id="boostCollect" class="chk" /> Избранное</label>
-              <label style="display:flex;align-items:center;gap:5px;"><input type="checkbox" id="boostRepost" class="chk" /> Репост</label>
-            </div>
-            <div class="field"><label>Комментарии со спинтаксом (по одному на строку, опц.)</label><textarea id="boostComments" style="min-height:60px;" placeholder="{fire|lets go!}&#10;works!"></textarea></div>
-            <div style="display:flex;gap:8px;align-items:center;">
-              <label style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--text-dim);white-space:nowrap;">⚡ Потоки:
-                <input type="number" id="boostThreads" value="5" min="1" max="15" class="thread-num-in" />
-              </label>
-              <button class="btn btn-primary" id="btnRunBoost" style="flex:1;" onclick="submitEngagementBoost()">🔥 Запустить массовый буст</button>
-            </div>
-          </div>
-
-          <div class="panel">
-            <div class="sec-title"><span>🎨 Массовый Оформитель профилей (Branding Studio)</span></div>
-            <div class="grid-2" style="margin-bottom:8px;">
-              <div class="field" style="margin:0;"><label>Nickname (спинтакс)</label><input type="text" id="brNick" placeholder="{Fortnite Drops|Pirate Club} {RAND4}" /></div>
-              <div class="field" style="margin:0;"><label>Префикс @username (+рандом)</label><input type="text" id="brUnamePrefix" placeholder="fortdrops_" /></div>
-            </div>
-            <div class="field"><label>Bio (спинтакс)</label><input type="text" id="brBio" placeholder="{Check your chests|Track drops} 👇" /></div>
-            <div class="grid-2" style="margin-bottom:8px;">
-              <div class="field" style="margin:0;"><label>Ссылка в Bio</label><input type="text" id="brBioUrl" placeholder="https://example.com" /></div>
-              <div class="field" style="margin:0;"><label>Новый пароль (опц.)</label><input type="password" id="brNewPass" placeholder="Оставь пустым" /></div>
-            </div>
-            <div class="field">
-              <label>Аватарка (уникализируется на каждый аккаунт)</label>
-              <input type="file" id="brAvatarFile" accept=".jpg,.jpeg,.png" />
-            </div>
-            <div style="display:flex;gap:14px;margin-bottom:10px;font-size:12px;">
-              <label style="display:flex;align-items:center;gap:5px;"><input type="checkbox" id="brUniqAv" checked class="chk" /> Уникализировать аватар</label>
-              <label style="display:flex;align-items:center;gap:5px;"><input type="checkbox" id="brEnableTotp" class="chk" /> Включить TikTok TOTP 2FA</label>
-            </div>
-            <div style="display:flex;gap:8px;align-items:center;">
-              <label style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--text-dim);white-space:nowrap;">⚡ Потоки:
-                <input type="number" id="brThreads" value="5" min="1" max="15" class="thread-num-in" />
-              </label>
-              <button class="btn btn-emerald" id="btnRunBrand" style="flex:1;" onclick="submitBulkBranding()">🎨 Оформить аккаунты</button>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- VIEW 6: ANALYTICS, SHADOWBAN RADAR & AUTOPILOT -->
-      <section id="view-analytics" class="hidden">
-        <div class="charts-grid">
-          <div class="panel">
-            <div class="sec-title">
-              <span>Распределение просмотров TikTok Studio по аккаунтам</span>
-              <a class="btn btn-sm" href="/api/analytics/export.csv" style="text-decoration:none;">⬇ CSV (Excel)</a>
-            </div>
-            <div id="viewsBarChart"></div>
-          </div>
-          <div class="panel">
-            <div class="sec-title"><span>Здоровье пула (Health Distribution)</span></div>
-            <div id="healthDonutChart" style="display:flex;align-items:center;justify-content:center;gap:24px;min-height:175px;"></div>
-          </div>
+        <div class="pills" style="margin-bottom:14px;">
+          <button class="pill active" onclick="switchSubTool('shadow', this)">👁 Чекер теней</button>
+          <button class="pill" onclick="switchSubTool('proxy', this)">🌐 Прокси</button>
+          <button class="pill" onclick="switchSubTool('config', this)">⚙️ Настройки</button>
+          <button class="pill" onclick="switchSubTool('utils', this)">🕵️ Шпион & 2FA</button>
         </div>
 
-        <div class="grid-2">
-          <div class="panel">
-            <div class="sec-title">
-              <span>Радар теневых банов (<code class="mono">check-shadows</code>)</span>
-              <button class="btn btn-sm btn-primary" id="btnCheckShadows" onclick="runShadowCheck()">📡 Запустить радар теней</button>
-            </div>
-            <div id="shadowsTableBox" style="font-size:12.5px;color:var(--text-dim);">
-              Нажми «Запустить радар теней», чтобы сверить историю залитых постов между профилем и публичным эндпоинтом TikTok.
-            </div>
-          </div>
-
-          <div class="panel">
-            <div class="sec-title"><span>⏰ Авто-Пилот (Планировщик задач)</span></div>
-            <div style="display:grid;grid-template-columns:1.3fr 0.8fr auto;gap:8px;margin-bottom:10px;">
-              <select id="apAction">
-                <option value="audit_all">↻ HTTP-аудит всех (0$)</option>
-                <option value="appeal_all">⚡ Снятие огранов 2048</option>
-                <option value="shadow_check">📡 Радар теней</option>
+        <!-- SUB 1: CLEAN EXPORT / DUMP & SHADOW CHECKER -->
+        <div id="sub-shadow" class="card">
+          <div class="card-head">
+            <div class="card-title">📤 Выгрузка постов и чекер тени</div>
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+              <select id="shScope" style="width:auto;padding:5px 9px;font-size:12px;">
+                <option value="uploaded" selected>Только пролитые</option>
+                <option value="all">Все аккаунты</option>
               </select>
-              <input type="number" id="apInterval" value="30" min="1" placeholder="Мин" />
-              <button class="btn btn-sm btn-primary" onclick="addAutoPilotJob()">+ Добавить</button>
+              <select id="shThreads" style="width:auto;padding:5px 8px;font-size:12px;" title="Потоки проверки">
+                <option value="1">1 пот.</option>
+                <option value="3">3 пот.</option>
+                <option value="5" selected>5 пот.</option>
+                <option value="8">8 пот.</option>
+                <option value="10">10 пот.</option>
+              </select>
+              <label style="font-size:11.5px;display:flex;align-items:center;gap:4px;cursor:pointer;" title="Проверять также Studio UNORIGINAL_NR и Account Updates 2048 для своих аккаунтов">
+                <input type="checkbox" id="shDeepAudit" checked class="chk" /> Studio + 2048
+              </label>
+              <button class="btn btn-sm btn-primary" id="btnRunShadow" onclick="runShadowChecker()">▶ Выгрузить</button>
             </div>
-            <div id="autopilotList" style="font-size:12px;color:var(--text-dim);">Задач пока нет.</div>
+          </div>
+          <div class="field">
+            <textarea id="shCustomUsers" style="min-height:54px;" placeholder="Оставь пустым для своих аккаунтов, либо вставь чужие @username / ссылки построчно..."></textarea>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;">
+            <button class="btn btn-xs btn-ok" onclick="copyShadowDump('telegram')">📨 Выгрузка (как KURDY)</button>
+            <button class="btn btn-xs" onclick="copyShadowDump('usernames')">📋 @Юзернеймы</button>
+            <button class="btn btn-xs" onclick="copyShadowDump('lines')">📋 Строки (login:pass:...)</button>
+            <button class="btn btn-xs" onclick="copyShadowDump('urls')">🔗 Ссылки постов</button>
+            <button class="btn btn-xs btn-ok" onclick="copyShadowDump('clean_lines')">✅ Только без тени</button>
+          </div>
+          <div id="shadowResultsBox" class="muted" style="font-size:12.5px;">Нажми «▶ Выгрузить» — покажу просмотры, публичные посты, гео и статус тени без лишнего шума.</div>
+        </div>
+
+        <!-- SUB 2: PROXY TESTER -->
+        <div id="sub-proxy" class="card hidden">
+          <div class="card-head">
+            <div class="card-title">Тестер прокси (Exit IP · GEO · пинг)</div>
+            <button class="btn btn-sm btn-primary" id="btnTestProxies" onclick="runProxyTest()">Проверить</button>
+          </div>
+          <div class="field">
+            <textarea id="proxyTestInput" placeholder="socks5://user:pass@host:port&#10;ip:port:user:pass"></textarea>
+          </div>
+          <div id="proxyTestResults"></div>
+        </div>
+
+        <!-- SUB 3: CONFIG -->
+        <div id="sub-config" class="card hidden" style="max-width:640px;">
+          <div class="card-head">
+            <div class="card-title">Настройки <code class="mono">config.toml</code></div>
+            <span class="badge b-dim mono" id="cfgKeyBadge">—</span>
+          </div>
+          <div class="field">
+            <label>Kintaro API Key (оставь пустым, чтобы не менять)</label>
+            <input type="password" id="cfgApiKey" placeholder="••••••••" />
+          </div>
+          <div class="row-2">
+            <div class="field"><label>Параллельных акков</label><input type="number" id="cfgParallel" min="1" max="16" value="2" /></div>
+            <div class="field"><label>Постов/день макс.</label><input type="number" id="cfgDailyMax" min="1" max="50" value="3" /></div>
+          </div>
+          <div class="row-2">
+            <div class="field"><label>Отлёжка сессии (мин)</label><input type="number" id="cfgAgeMin" min="0" step="5" value="60" /></div>
+            <div class="field"><label>Пауза между постами (ч)</label><input type="number" id="cfgGapHours" min="0" step="0.5" value="3" /></div>
+          </div>
+          <label class="toggle-row"><span>Автопрогрев ленты</span><input type="checkbox" id="cfgWarmupOn" class="chk" /></label>
+          <label class="toggle-row"><span>Уникализатор FFmpeg / Pillow</span><input type="checkbox" id="cfgUniqOn" class="chk" /></label>
+          <button class="btn btn-primary" style="margin-top:6px;" onclick="saveConfig()">💾 Сохранить</button>
+        </div>
+
+        <!-- SUB 4: SPY & TOTP -->
+        <div id="sub-utils" class="grid-eq hidden">
+          <div class="card">
+            <div class="card-head"><div class="card-title">🕵️ Шпион конкурента</div></div>
+            <div style="display:flex;gap:8px;margin-bottom:10px;">
+              <input type="text" id="spyUserInput" placeholder="@username конкурента" />
+              <button class="btn btn-sm btn-primary" id="btnSpy" onclick="runSpy()">Сканировать</button>
+            </div>
+            <div id="spyResultBox" class="muted" style="font-size:12.5px;">Охваты, топ хэштеги и Music ID конкурента.</div>
+          </div>
+          <div class="card">
+            <div class="card-head"><div class="card-title">🔐 2FA TOTP генератор</div></div>
+            <div style="display:flex;gap:8px;margin-bottom:10px;">
+              <input type="text" id="totpSecretInput" placeholder="Base32 секрет..." />
+              <button class="btn btn-sm btn-ok" onclick="genTotp()">Код</button>
+            </div>
+            <div id="totpResultBox" class="mono" style="font-size:20px;font-weight:700;color:var(--cyan);">—</div>
           </div>
         </div>
       </section>
-
-      <!-- VIEW 5: PROXY VAULT & CONFIG EDITOR -->
-      <section id="view-settings" class="hidden">
-        <div class="grid-2">
-          <div class="panel">
-            <div class="sec-title"><span>Массовый тест прокси (Cloudflare Exit IP · GEO · Latency)</span></div>
-            <p style="font-size:12px;color:var(--text-dim);margin-bottom:10px;">
-              Проверяет реальную страну выхода и пинг без касания TikTok. Поддерживает <code>socks5://</code>, <code>http://</code> и <code>ip:port:user:pass</code>.
-            </p>
-            <div class="field">
-              <textarea id="proxyTestInput" placeholder="socks5://user:pass@host:port&#10;ip:port:user:pass"></textarea>
-            </div>
-            <button class="btn btn-primary" id="btnTestProxies" onclick="runProxyTest()">🧪 Проверить прокси</button>
-            <div id="proxyTestResults" style="margin-top:14px;"></div>
-          </div>
-
-          <div class="panel">
-            <div class="sec-title">
-              <span>Настройки конвейера (<code class="mono">config.toml</code>)</span>
-              <span class="badge b-neutral mono" id="cfgKeyBadge">API Key: —</span>
-            </div>
-            <div class="field">
-              <label>Новый Kintaro API Key (оставь пустым, чтобы не менять текущий)</label>
-              <input type="password" id="cfgApiKey" placeholder="Оставь пустым для сохранения текущего ключа" />
-            </div>
-            <div class="grid-2">
-              <div class="field">
-                <label>Параллельных аккаунтов</label>
-                <input type="number" id="cfgParallel" min="1" max="16" value="2" />
-              </div>
-              <div class="field">
-                <label>Макс. постов в день / акк</label>
-                <input type="number" id="cfgDailyMax" min="1" max="50" value="3" />
-              </div>
-            </div>
-            <div class="grid-2">
-              <div class="field">
-                <label>Отлёжка новой сессии (мин)</label>
-                <input type="number" id="cfgAgeMin" min="0" step="5" value="30" />
-              </div>
-              <div class="field">
-                <label>Пауза между постами (часы)</label>
-                <input type="number" id="cfgGapHours" min="0" step="0.5" value="3" />
-              </div>
-            </div>
-            <div style="display:flex;gap:18px;margin-bottom:16px;font-size:12.5px;">
-              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="cfgWarmupOn" class="chk" /> Автопрогрев ленты</label>
-              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="cfgUniqOn" class="chk" /> Уникализатор FFmpeg/Pillow</label>
-            </div>
-            <button class="btn btn-emerald" onclick="saveConfig()">💾 Сохранить config.toml</button>
-          </div>
-        </div>
-      </section>
-    </div>
+    </main>
   </div>
 </div>
 
-<!-- FLOATING MULTI-SELECT BULK BAR -->
+<!-- FLOATING MULTI-SELECT BAR -->
 <div id="bulkBar" class="bulk-bar hidden">
-  <span style="font-size:12.5px;font-weight:700;">Выбрано: <span id="bulkCount" class="mono">0</span></span>
-  <span class="badge b-cyan mono" id="bulkThreadsBadge" title="Настраивается в верхнем баре ⚡ Потоки">⚡ 5 пот.</span>
-  <button class="btn btn-sm btn-emerald" onclick="copySelectedAccounts('lines')">📋 Копировать</button>
-  <button class="btn btn-sm btn-primary" onclick="runBulk('auth')">🔑 Войти</button>
-  <button class="btn btn-sm" onclick="runBulk('audit')">↻ Аудит</button>
-  <button class="btn btn-sm btn-emerald" onclick="sendSelectedToUnbanQueue()" title="Отправить выбранные в отдельную очередь дожима волн 2048">⏳ Дожать волны</button>
-  <button class="btn btn-sm" onclick="runBulk('appeal')">⚡ 1 проход</button>
-  <button class="btn btn-sm btn-amber" onclick="runBulk('clean_posts')">🧹 Очистить посты</button>
-  <button class="btn btn-sm" onclick="runBulk('warmup')">🔥 Прогрев</button>
-  <button class="btn btn-sm" onclick="runBulk('sync_geo')">🌎 Sync US SIM</button>
-  <button class="btn btn-sm" onclick="promptBulkProxy()">🌐 Сменить прокси</button>
-  <button class="btn btn-sm btn-rose" onclick="runBulk('delete')">🗑 Удалить акки</button>
-  <button class="btn btn-sm btn-ghost" onclick="clearSelection()">✕</button>
+  <strong style="font-size:12.5px;margin-right:4px;">Выбрано: <span id="bulkCount" class="mono">0</span></strong>
+  <button class="btn btn-xs btn-ok" onclick="copySelected()">📋 Копировать</button>
+  <button class="btn btn-xs btn-primary" onclick="runBulk('auth')">🔑 Войти</button>
+  <button class="btn btn-xs" onclick="runBulk('audit')">↻ Аудит</button>
+  <button class="btn btn-xs btn-ok" onclick="runBulk('appeal')">⚡ Ограны</button>
+  <button class="btn btn-xs btn-warn" onclick="runBulk('clean_posts')">🗑 Посты</button>
+  <button class="btn btn-xs" onclick="runBulk('sync_geo')">🌎 US</button>
+  <button class="btn btn-xs" onclick="promptBulkProxy()">🌐 Прокси</button>
+  <button class="btn btn-xs btn-err" onclick="runBulk('delete')">Удалить</button>
+  <button class="btn btn-xs btn-ghost" onclick="clearSelection()">✕</button>
 </div>
 
-<!-- SLIDE-OVER ACCOUNT INSPECTOR DRAWER -->
-<div id="drawerBackdrop" class="drawer-backdrop hidden" onclick="if(event.target===this) closeDrawer()">
+<!-- SLIDE-OVER ACCOUNT INSPECTOR -->
+<div id="drawerBg" class="drawer-bg hidden" onclick="if(event.target===this) closeDrawer()">
   <div class="drawer">
     <div class="drawer-head">
-      <div id="drawerTitleGroup"></div>
-      <button class="btn btn-sm btn-ghost" onclick="closeDrawer()">✕ Esc</button>
+      <div id="drawerHeadInfo"></div>
+      <button class="btn btn-sm btn-ghost" onclick="closeDrawer()">✕</button>
     </div>
     <div id="drawerBody" class="drawer-body"></div>
   </div>
 </div>
 
-<!-- COMMAND PALETTE (Ctrl+K) -->
-<div id="cmdkBackdrop" class="modal-backdrop hidden" onclick="if(event.target===this) closeCmdK()">
-  <div class="cmdk">
-    <input type="text" id="cmdkInput" class="cmdk-in" placeholder="Введи команду или @username аккаунта..." oninput="renderCmdK()" />
-    <div id="cmdkList" class="cmdk-list"></div>
-  </div>
-</div>
-
-<!-- TOAST NOTIFICATIONS -->
-<div id="toasts" class="toasts"></div>
-
-<!-- COLLAPSIBLE FILTERABLE LIVE SSE CONSOLE -->
-<footer id="consoleDock" class="console-dock">
-  <div class="console-bar">
-    <div style="display:flex;align-items:center;gap:10px;cursor:pointer;" onclick="document.getElementById('consoleDock').classList.toggle('collapsed')">
+<!-- COLLAPSED-BY-DEFAULT LIVE LOG BAR -->
+<footer id="logDock" class="log-dock collapsed">
+  <div class="log-bar" onclick="document.getElementById('logDock').classList.toggle('collapsed')">
+    <span style="display:flex;align-items:center;gap:7px;font-weight:600;">
       <span class="dot on"></span>
-      <span>LIVE ТЕЛЕМЕТРИЯ (SSE)</span>
-    </div>
-    <div style="display:flex;align-items:center;gap:6px;">
-      <button class="chip active" onclick="setLogLevel('all', this)">ALL</button>
-      <button class="chip" onclick="setLogLevel('success', this)">OK</button>
-      <button class="chip" onclick="setLogLevel('warn', this)">WARN</button>
-      <button class="chip" onclick="setLogLevel('error', this)">ERR</button>
-      <button class="btn btn-sm btn-ghost" onclick="clearConsole()">Очистить</button>
-      <button class="btn btn-sm btn-ghost" onclick="document.getElementById('consoleDock').classList.toggle('collapsed')">▲▼</button>
-    </div>
+      <span>ЛОГИ</span>
+    </span>
+    <span id="logPreview" class="log-preview mono">Подключено</span>
+    <span class="mono" style="font-size:11px;">▲▼</span>
   </div>
-  <div id="consoleBody" class="console-body"></div>
+  <div id="logBody" class="log-body"></div>
 </footer>
+
+<div id="toasts" class="toasts"></div>
 
 <script src="/static/app.js"></script>
 </body>

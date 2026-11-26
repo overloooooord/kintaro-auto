@@ -1357,7 +1357,7 @@ async def remove_account_restrictions(
                     continue
 
                 if stagger_appeals and appeals_sent_count > 0:
-                    delay = random.uniform(*APPEAL_STAGGER_SECONDS)
+                    delay = random.uniform(2.5, 4.5)
                     logger.info(
                         "[%s] Анти-спам пауза %.1fс перед апелляцией поста %s...",
                         account.account_id,
@@ -1513,6 +1513,28 @@ async def remove_account_restrictions(
                             detail=f"Статус поста: {pp.appeal_status_label} (views={pp.play_count})",
                         )
                     )
+
+        # Recompute account_health & move newly restored notices (3/6) out of active violations
+        still_active: list[NoticeViolation] = []
+        for v in audit.notice_violations:
+            if v.status_code in (2, 3, 6):
+                audit.restored_notices.append(v)
+            else:
+                still_active.append(v)
+        audit.notice_violations = still_active
+        has_actionable = any(v.can_appeal or v.status_code == 1 for v in audit.notice_violations) or (
+            appeal_studio_posts and any(p.appeal_status == 0 or p.v2_can_appeal for p in audit.post_penalties)
+        )
+        has_appealing = any(v.status_code == 4 for v in audit.notice_violations) or any(
+            p.appeal_status == 3 for p in audit.post_penalties
+        )
+        has_failed_active = any(v.status_code == 7 for v in audit.notice_violations)
+        if has_actionable or has_failed_active:
+            audit.account_health = "action_required"
+        elif has_appealing:
+            audit.account_health = "appealing"
+        else:
+            audit.account_health = "eligible"
 
         _merge_refreshed_cookies(account, http.cookies)
 

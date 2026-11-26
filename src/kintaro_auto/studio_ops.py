@@ -656,9 +656,10 @@ class UnbanWaveQueueManager:
         self._on_event = on_event
         self._on_audit = on_audit
 
-        self._queue: asyncio.Queue[tuple[str, float]] = asyncio.Queue()
+        self._queue: asyncio.Queue[tuple[str, float, bool]] = asyncio.Queue()
         self._queued_set: set[str] = set()
         self._workers: list[asyncio.Task[None]] = []
+        self._delayed_tasks: dict[str, asyncio.Task[None]] = {}
         self._stop_event = asyncio.Event()
         self._records: dict[str, dict[str, Any]] = {}
         self._running = False
@@ -672,6 +673,8 @@ class UnbanWaveQueueManager:
             "appeal_studio_posts": False,
             "hide_rejected": True,
             "sort_to_folders": True,
+            "delayed_recheck_minutes": 0,
+            "recheck_include_studio": True,
             "appeal_text": (
                 "Our content is original, authentic, and strictly follows all TikTok Community Guidelines."
             ),
@@ -720,8 +723,11 @@ class UnbanWaveQueueManager:
         hide_rejected: bool | None = None,
         sort_to_folders: bool | None = None,
         appeal_text: str | None = None,
+        delayed_recheck_minutes: int | None = None,
+        recheck_include_studio: bool | None = None,
         initial_wait_sec: float = 0.0,
         clear_finished: bool = False,
+        is_recheck: bool = False,
     ) -> dict[str, Any]:
         # Prune completed worker handles
         self._workers = [w for w in self._workers if not w.done()]
@@ -746,6 +752,10 @@ class UnbanWaveQueueManager:
             self._config["hide_rejected"] = bool(hide_rejected)
         if sort_to_folders is not None:
             self._config["sort_to_folders"] = bool(sort_to_folders)
+        if delayed_recheck_minutes is not None:
+            self._config["delayed_recheck_minutes"] = max(0, min(120, int(delayed_recheck_minutes)))
+        if recheck_include_studio is not None:
+            self._config["recheck_include_studio"] = bool(recheck_include_studio)
         if appeal_text is not None and appeal_text.strip():
             self._config["appeal_text"] = appeal_text.strip()
 
@@ -777,12 +787,12 @@ class UnbanWaveQueueManager:
                 "quiet_sec": int(self._config["quiet_seconds"]),
                 "elapsed_sec": 0,
                 "folder_key": "",
-                "folder_title": "В очереди...",
+                "folder_title": "Повторный чек (поздняя волна)..." if is_recheck else "В очереди...",
                 "error": "",
                 "copy_line": format_account_copy_line(acc),
                 "updated_at": datetime.now().strftime("%H:%M:%S"),
             }
-            self._queue.put_nowait((aid_s, max(0.0, float(initial_wait_sec))))
+            self._queue.put_nowait((aid_s, max(0.0, float(initial_wait_sec)), bool(is_recheck)))
             added.append(aid_s)
 
         if added:
@@ -807,10 +817,14 @@ class UnbanWaveQueueManager:
 
     def stop(self) -> dict[str, Any]:
         self._stop_event.set()
+        for t in list(self._delayed_tasks.values()):
+            if not t.done():
+                t.cancel()
+        self._delayed_tasks.clear()
         drained = 0
         while not self._queue.empty():
             try:
-                aid, _ = self._queue.get_nowait()
+                aid, _, _ = self._queue.get_nowait()
                 self._queued_set.discard(aid)
                 if aid in self._records and self._records[aid]["status"] == "queued":
                     self._records[aid]["status"] = "stopped"
@@ -822,6 +836,35 @@ class UnbanWaveQueueManager:
                 break
         self._emit(f"⏹ Остановка очереди снятия огранов 2048 (снято из очереди: {drained})...", "warn", "unban_queue")
         return {"ok": True, "drained": drained, "snapshot": self.snapshot()}
+
+    def _schedule_delayed_recheck(self, aid: str, delay_minutes: int, include_studio: bool) -> None:
+        old = self._delayed_tasks.get(aid)
+        if old and not old.done():
+            old.cancel()
+
+        async def _later() -> None:
+            try:
+                if await self._interruptible_sleep(delay_minutes * 60.0):
+                    return
+                self._emit(
+                    f"[{aid}] 🔁 Авто-дожим через {delay_minutes} мин: проверка поздних волн 2048"
+                    + (" + Studio UNORIGINAL_NR" if include_studio else "") + "...",
+                    "info",
+                    "unban_queue",
+                )
+                self.enqueue(
+                    [aid],
+                    appeal_studio_posts=include_studio,
+                    wait_settle=False,
+                    clear_finished=False,
+                    is_recheck=True,
+                )
+            except asyncio.CancelledError:
+                return
+            finally:
+                self._delayed_tasks.pop(aid, None)
+
+        self._delayed_tasks[aid] = asyncio.create_task(_later())
 
     def clear_finished(self) -> dict[str, Any]:
         for aid in list(self._records.keys()):
@@ -845,7 +888,7 @@ class UnbanWaveQueueManager:
         try:
             while not self._stop_event.is_set():
                 try:
-                    aid, init_wait = self._queue.get_nowait()
+                    aid, init_wait, is_recheck = self._queue.get_nowait()
                 except asyncio.QueueEmpty:
                     break
 
@@ -951,6 +994,11 @@ class UnbanWaveQueueManager:
                             "success" if fkey == "clean" else "warn",
                             "audit_updated",
                         )
+                        recheck_min = int(cfg.get("delayed_recheck_minutes") or 0)
+                        if not is_recheck and recheck_min > 0 and not self._stop_event.is_set():
+                            self._schedule_delayed_recheck(
+                                aid, recheck_min, bool(cfg.get("recheck_include_studio", True))
+                            )
                 except Exception as exc:
                     if rec is not None:
                         rec["status"] = "error"
@@ -985,11 +1033,13 @@ class UnbanWaveQueueManager:
             "appeals_total": sum(int(x.get("appeals_sent") or 0) for x in items),
         }
         active_workers = sum(1 for w in self._workers if not w.done())
+        scheduled_rechecks = sum(1 for t in self._delayed_tasks.values() if not t.done())
         return {
             "ok": True,
             "running": self._running or active_workers > 0,
             "stopping": self._stop_event.is_set(),
             "active_workers": active_workers,
+            "scheduled_rechecks": scheduled_rechecks,
             "config": dict(self._config),
             "counts": counts,
             "items": items,

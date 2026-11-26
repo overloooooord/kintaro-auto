@@ -178,6 +178,7 @@ class DashboardHub:
         self.cfg: AppConfig = load_config(config_path)
         self.store = StateStore(self.cfg.state_dir)
         self.cache_file = Path(self.cfg.state_dir) / "audit_cache.json"
+        self._cache_mtime: float = 0.0
         self.audit_cache: dict[str, dict[str, Any]] = self._load_audit_cache()
         self.shadow_cache: list[dict[str, Any]] = []
         self.logs: list[dict[str, Any]] = []
@@ -192,6 +193,7 @@ class DashboardHub:
     def _load_audit_cache(self) -> dict[str, dict[str, Any]]:
         if self.cache_file.exists():
             try:
+                self._cache_mtime = self.cache_file.stat().st_mtime
                 data = json.loads(self.cache_file.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
                     return data
@@ -205,12 +207,21 @@ class DashboardHub:
             self.cache_file.write_text(
                 json.dumps(self.audit_cache, ensure_ascii=False, indent=2), encoding="utf-8"
             )
+            self._cache_mtime = self.cache_file.stat().st_mtime
         except Exception:
             pass
 
     def reload_env(self) -> None:
         self.cfg = load_config(self.config_path)
         self.store = StateStore(self.cfg.state_dir)
+        self.cache_file = Path(self.cfg.state_dir) / "audit_cache.json"
+        if self.cache_file.exists():
+            try:
+                mt = self.cache_file.stat().st_mtime
+                if mt > self._cache_mtime:
+                    self.audit_cache = self._load_audit_cache()
+            except Exception:
+                pass
 
     def start_job(self, label: str, total: int = 1, threads: int = 1) -> str:
         jid = uuid.uuid4().hex[:8]
@@ -539,6 +550,8 @@ class UnbanQueueStartRequest(BaseModel):
     appeal_studio_posts: bool = False
     hide_rejected: bool = True
     sort_to_folders: bool = True
+    delayed_recheck_minutes: int = 0
+    recheck_include_studio: bool = True
     appeal_text: str = "Our content is original, authentic, and strictly follows all TikTok Community Guidelines."
     clear_finished: bool = True
 
@@ -1628,6 +1641,7 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
         appeal_quiet_window_sec: float = Form(60.0),
         defer_post_appeal_to_queue: bool = Form(False),
         appeal_queue_threads: int = Form(3),
+        delayed_recheck_minutes: int = Form(12),
         pin_sticky_proxy: bool = Form(False),
         override_proxy_country: str = Form(""),
     ) -> dict[str, Any]:
@@ -1716,6 +1730,8 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
                 appeal_studio_posts=False,
                 hide_rejected=True,
                 sort_to_folders=camp.sort_to_folders,
+                delayed_recheck_minutes=max(0, min(120, int(delayed_recheck_minutes))),
+                recheck_include_studio=True,
                 appeal_text=camp.appeal_text,
                 initial_wait_sec=camp.appeal_post_wait_sec,
                 clear_finished=False,
@@ -1861,6 +1877,8 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
             appeal_studio_posts=req.appeal_studio_posts,
             hide_rejected=req.hide_rejected,
             sort_to_folders=req.sort_to_folders,
+            delayed_recheck_minutes=req.delayed_recheck_minutes,
+            recheck_include_studio=req.recheck_include_studio,
             appeal_text=req.appeal_text,
             clear_finished=req.clear_finished,
         )
@@ -1933,9 +1951,10 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
                 hub.audit_cache[res["account_id"]] = ad_copy
                 hub._save_audit_cache()
             lvl = "success" if res["verdict"] == "clean" else ("warn" if res["verdict"] == "partial_shadow" else "error")
+            studio_note = f" | Studio UNORIGINAL_NR={res['studio_flagged_count']}" if res.get("studio_flagged_count") else ""
             hub.push_event(
-                f"[@{uname}] {res['verdict_label']} | score={res['health_score']}/100 | "
-                f"постов={res['public_posts_count']}/{res['total_posts']} | просм.={res['total_views']}",
+                f"[@{uname}] {res['verdict_label']} | постов={res['public_posts_count']}/{res['total_posts']} | "
+                f"👁 {res['total_views']}{studio_note}",
                 lvl,
             )
 

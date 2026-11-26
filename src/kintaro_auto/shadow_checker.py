@@ -116,6 +116,7 @@ def inspect_aweme_shadow_signals(
     username: str = "",
     is_public_visible: bool = True,
     studio_flagged: bool = False,
+    studio_penalty_info: dict[str, Any] | None = None,
     zero_view_threshold_minutes: float = 20.0,
     now_ts: float | None = None,
 ) -> dict[str, Any]:
@@ -176,35 +177,44 @@ def inspect_aweme_shadow_signals(
     else:
         mod_code, mod_label = "passed", "Пройдена"
 
-    # 2. Shadowban signals (hard TikTok internal flags + public visibility + velocity)
-    hard_reasons: list[str] = []
+    # 2. Honest shadowban signals (ONLY real public/FYP shadow flags or 0 views — NOT Studio UNORIGINAL_NR!)
+    hard_public_reasons: list[str] = []
     soft_reasons: list[str] = []
 
     if is_nff_or_nr:
-        hard_reasons.append("is_nff_or_nr=true (исключён из FYP)")
+        hard_public_reasons.append("is_nff_or_nr=true (исключён из FYP)")
     if risk_sink:
-        hard_reasons.append("risk_sink=true (понижен в выдаче)")
+        hard_public_reasons.append("risk_sink=true (понижен в выдаче)")
     if is_prohibited:
-        hard_reasons.append("is_prohibited=true (запрещён)")
+        hard_public_reasons.append("is_prohibited=true (запрещён)")
     if self_see:
-        hard_reasons.append("self_see=true (виден только автору)")
-    if studio_flagged:
-        hard_reasons.append("Studio: Not eligible for For You")
+        hard_public_reasons.append("self_see=true (виден только автору)")
     if not is_public_visible and private_status == 0 and not is_delete:
-        hard_reasons.append("Скрыт из публичного профиля")
+        hard_public_reasons.append("Скрыт из публички (3020004 unavailable)")
     if create_time > 0 and age_minutes >= zero_view_threshold_minutes and views == 0:
-        hard_reasons.append(f"0 просмотров за {int(age_minutes)} мин")
+        hard_public_reasons.append(f"0 просмотров за {int(age_minutes)} мин")
 
     if in_reviewing:
-        soft_reasons.append("in_reviewing=true (висит на проверке)")
+        soft_reasons.append("in_reviewing=true (на проверке)")
     if not allow_share:
         soft_reasons.append("allow_share=false (репост закрыт)")
     if risk_warn or risk_type != 0:
         soft_reasons.append(f"risk_infos(warn={risk_warn}, type={risk_type})")
-    if create_time > 0 and age_minutes >= 60.0 and 0 < views <= 5:
-        soft_reasons.append(f"Слабый охват ({views} просм. за {int(age_minutes)} мин)")
 
-    if hard_reasons:
+    # Separate informational TikTok Studio FYP note (does NOT falsely mark a live multi-view post as shadowbanned!)
+    studio_can_submit = False
+    studio_status_label = ""
+    studio_note = ""
+    if studio_flagged or studio_penalty_info:
+        sp = studio_penalty_info or {}
+        labels = [str(x) for x in (sp.get("reason_labels") or []) if x]
+        st_lbl = str(sp.get("appeal_status_label") or "")
+        studio_status_label = st_lbl
+        studio_can_submit = bool(sp.get("can_submit"))
+        lbl_txt = ",".join(labels) if labels else "FYP_INELIGIBLE"
+        studio_note = f"{lbl_txt}" + (f" ({st_lbl})" if st_lbl else "")
+
+    if hard_public_reasons:
         shadow_code, shadow_label = "yes", "Да"
     elif soft_reasons:
         shadow_code, shadow_label = "suspect", "Подозрение"
@@ -232,8 +242,11 @@ def inspect_aweme_shadow_signals(
         "moderation_label": mod_label,
         "shadow_code": shadow_code,
         "shadow_label": shadow_label,
-        "reasons": hard_reasons + soft_reasons,
+        "reasons": hard_public_reasons + soft_reasons,
         "is_public_visible": is_public_visible,
+        "studio_note": studio_note,
+        "studio_can_submit": studio_can_submit,
+        "studio_status_label": studio_status_label,
         "flags": {
             "is_nff_or_nr": is_nff_or_nr,
             "risk_sink": risk_sink,
@@ -251,21 +264,21 @@ def inspect_aweme_shadow_signals(
 
 
 def format_account_telegram_report(report: dict[str, Any]) -> str:
-    """Formats an account shadowban report in clean KURDY-style Telegram blocks."""
+    """Formats an account export / dump in clean KURDY-style Telegram blocks (no fake scores)."""
     uname = report.get("username") or ""
     verdict_lbl = report.get("verdict_label") or ""
-    score = report.get("health_score", 0)
     posts = report.get("posts") or []
     if not posts:
-        return f"💊 На аккаунте @{uname}\n└ {verdict_lbl or 'нет публичных постов'}"
+        return f"💊 На аккаунте @{uname}\n└ нет публичных постов"
 
+    regs = ",".join(report.get("regions") or []) or "—"
     lines = [
-        f"{verdict_lbl} | @{uname} (score {score}/100 | постов: {len(posts)} | просм.: {report.get('total_views', 0)})"
+        f"{verdict_lbl} | @{uname} | Постов: {report.get('public_posts_count', len(posts))}/{len(posts)} | 👁 {report.get('total_views', 0)} | {regs}"
     ]
     for idx, p in enumerate(posts, start=1):
         tags_str = " ".join(p.get("hashtags") or [])
         lines.append(
-            f"\nПост {idx}: | @{uname}\n"
+            f"\nВидео {idx}: | @{uname}\n"
             f"👁: {p['views']} ❤️: {p['likes']} 💬: {p['comments']} 📣: {p['shares']} 💾: {p['saves']}\n"
             f"🌟 Тень: {p['shadow_label']}"
             + (f" ({'; '.join(p['reasons'])})" if p.get("reasons") else "")
@@ -322,20 +335,41 @@ async def check_account_shadowban(
         profile_error = str(exc)[:140]
 
     pub_items: list[dict[str, Any]] = []
+    seen_pub_ids: set[str] = set()
     pub_error = ""
     try:
-        pub_resp = await client.get_user_posts(probe_account, handle, count=max(1, min(35, max_posts)))
-        raw_list = pub_resp.get("aweme_list") or (pub_resp.get("data") or {}).get("aweme_list") or []
-        if isinstance(raw_list, list):
-            pub_items = [x for x in raw_list if isinstance(x, dict)]
+        cursor = "0"
+        page_sz = max(12, min(35, max_posts))
+        for _ in range(3):
+            if len(pub_items) >= max_posts:
+                break
+            pub_resp = await client.get_user_posts(
+                probe_account, handle, count=page_sz, max_cursor=cursor
+            )
+            raw_list = pub_resp.get("aweme_list") or (pub_resp.get("data") or {}).get("aweme_list") or []
+            added_pg = 0
+            if isinstance(raw_list, list):
+                for x in raw_list:
+                    if not isinstance(x, dict):
+                        continue
+                    aid_x = str(x.get("aweme_id") or "")
+                    if aid_x and aid_x not in seen_pub_ids:
+                        seen_pub_ids.add(aid_x)
+                        pub_items.append(x)
+                        added_pg += 1
+            next_c = str(pub_resp.get("max_cursor") or "")
+            if not pub_resp.get("has_more") or not next_c or next_c == cursor or added_pg == 0:
+                break
+            cursor = next_c
+        pub_items = pub_items[:max_posts]
     except Exception as exc:
         pub_error = str(exc)[:140]
 
     public_ids = {str(it.get("aweme_id") or "") for it in pub_items if it.get("aweme_id")}
 
-    # 2) Optional Deep Audit on owned authenticated session (Owner feed diff + 2048 + Studio)
+    # 2) Optional Deep Audit on owned authenticated session (Owner feed diff + /v1/post/get verify + 2048 + Studio)
     owner_only_items: list[dict[str, Any]] = []
-    studio_flagged_ids: set[str] = set()
+    studio_penalties_map: dict[str, dict[str, Any]] = {}
     audit_health = "unknown"
     active_2048 = 0
     reviewing_2048 = 0
@@ -343,14 +377,25 @@ async def check_account_shadowban(
 
     if deep_audit and own_account is not None and own_account.authenticated and own_account.device:
         try:
-            self_resp = await client.get_self_posts(own_account, count=max(1, min(35, max_posts)))
+            self_resp = await client.get_self_posts(own_account, count=max(12, min(35, max_posts)))
             self_list = self_resp.get("aweme_list") or (self_resp.get("data") or {}).get("aweme_list") or []
             if isinstance(self_list, list):
-                for sit in self_list:
+                for sit in self_list[:max_posts]:
                     if isinstance(sit, dict):
                         sid = str(sit.get("aweme_id") or "")
                         if sid and sid not in public_ids:
-                            owner_only_items.append(sit)
+                            # Double-check via public `/v1/post/get` before flagging as hidden!
+                            is_really_hidden = True
+                            try:
+                                gp = await client.get_post(probe_account, sid)
+                                if isinstance(gp.get("aweme_detail"), dict) and gp["aweme_detail"].get("aweme_id"):
+                                    is_really_hidden = False
+                                    pub_items.append(gp["aweme_detail"])
+                                    public_ids.add(sid)
+                            except Exception:
+                                is_really_hidden = True
+                            if is_really_hidden:
+                                owner_only_items.append(sit)
         except Exception:
             pass
 
@@ -365,97 +410,99 @@ async def check_account_shadowban(
             reviewing_2048 = sum(1 for v in aud.notice_violations if v.status_code == 4)
             for pp in aud.post_penalties:
                 if pp.appeal_status != 2 or pp.v2_can_appeal:
-                    studio_flagged_ids.add(str(pp.item_id))
+                    studio_penalties_map[str(pp.item_id)] = {
+                        "reason_labels": list(pp.reason_labels),
+                        "appeal_status": pp.appeal_status,
+                        "appeal_status_label": pp.appeal_status_label,
+                        "can_submit": pp.appeal_status == 0 or pp.v2_can_appeal,
+                    }
             audit_dict = asdict(aud)
         except Exception:
             pass
 
-    # 3) Inspect all public posts + any silently hidden owner posts
+    # 3) Inspect all public posts + any confirmed-hidden owner posts
     now_ts = time.time()
     posts_analyzed: list[dict[str, Any]] = []
     for it in pub_items:
         aid = str(it.get("aweme_id") or "")
+        sp_info = studio_penalties_map.get(aid)
         posts_analyzed.append(
             inspect_aweme_shadow_signals(
                 it,
                 username=handle,
                 is_public_visible=True,
-                studio_flagged=aid in studio_flagged_ids,
+                studio_flagged=sp_info is not None,
+                studio_penalty_info=sp_info,
                 zero_view_threshold_minutes=zero_view_threshold_minutes,
                 now_ts=now_ts,
             )
         )
     for it in owner_only_items:
         aid = str(it.get("aweme_id") or "")
+        sp_info = studio_penalties_map.get(aid)
         posts_analyzed.append(
             inspect_aweme_shadow_signals(
                 it,
                 username=handle,
                 is_public_visible=False,
-                studio_flagged=aid in studio_flagged_ids,
+                studio_flagged=sp_info is not None,
+                studio_penalty_info=sp_info,
                 zero_view_threshold_minutes=zero_view_threshold_minutes,
                 now_ts=now_ts,
             )
         )
 
-    # 4) Aggregate verdict & 0..100 health score
+    # 4) Honest account verdict (NO fake scores, NO screaming "SHADOWBAN" on 500-view live accounts!)
     total_posts = len(posts_analyzed)
     public_posts_count = len(pub_items)
     hidden_public_count = sum(1 for p in posts_analyzed if not p["is_public_visible"] and p["flags"]["private_status"] == 0)
     shadow_yes = sum(1 for p in posts_analyzed if p["shadow_code"] == "yes")
     shadow_suspect = sum(1 for p in posts_analyzed if p["shadow_code"] == "suspect")
     shadow_clean = sum(1 for p in posts_analyzed if p["shadow_code"] == "no")
+    studio_flagged_count = len(studio_penalties_map)
+    studio_can_submit_count = sum(1 for x in studio_penalties_map.values() if x.get("can_submit"))
     total_views = sum(p["views"] for p in posts_analyzed)
     zero_view_posts = sum(1 for p in posts_analyzed if p["views"] == 0)
     regions = sorted({p["region"] for p in posts_analyzed if p["region"]})
+    post_urls = [p["url"] for p in posts_analyzed if p.get("url")]
 
     reasons: list[str] = []
-    score = 100
-
     if active_2048 > 0:
-        score -= 45
         reasons.append(f"Активный огран 2048 ({active_2048})")
     if reviewing_2048 > 0:
-        score -= 15
         reasons.append(f"Апелляция 2048 на проверке ({reviewing_2048})")
     if hidden_public_count > 0:
-        score -= min(40, hidden_public_count * 15)
-        reasons.append(f"Скрыто из публички: {hidden_public_count} пост.")
-    if studio_flagged_ids:
-        score -= min(30, len(studio_flagged_ids) * 12)
-        reasons.append(f"Флаги FYP в Studio: {len(studio_flagged_ids)}")
-    if total_posts > 0:
-        if shadow_yes > 0:
-            score -= min(55, int(60 * (shadow_yes / total_posts)))
-            reasons.append(f"Постов в тени: {shadow_yes}/{total_posts}")
-        if shadow_suspect > 0:
-            score -= min(20, int(25 * (shadow_suspect / total_posts)))
-            reasons.append(f"Подозрительных постов: {shadow_suspect}/{total_posts}")
+        reasons.append(f"Скрыто из публички (3020004): {hidden_public_count} пост.")
+    if shadow_yes > 0 and hidden_public_count == 0:
+        reasons.append(f"Постов в тени: {shadow_yes}/{total_posts}")
+    if shadow_suspect > 0:
+        reasons.append(f"На проверке / подозр.: {shadow_suspect}/{total_posts}")
     if profile_private:
         reasons.append("Аккаунт приватный")
-
-    score = max(0, min(100, score))
 
     if profile_error and not pub_items and not owner_only_items:
         verdict = "not_found"
         verdict_label = "💀 Не найден / Ошибка"
-        score = 0
         reasons.append(profile_error)
     elif total_posts == 0:
         verdict = "no_public_posts"
         verdict_label = "💊 Нет публичных постов"
-        score = 40 if not active_2048 else 10
         if pub_error:
             reasons.append(pub_error)
-    elif active_2048 > 0 or (total_posts > 0 and shadow_yes >= max(1, (total_posts + 1) // 2)) or (public_posts_count == 0 and hidden_public_count > 0):
+    elif (
+        active_2048 > 0
+        or (public_posts_count == 0 and hidden_public_count > 0)
+        or (total_posts > 0 and total_views == 0 and shadow_yes >= max(1, (total_posts + 1) // 2))
+        or (total_posts > 0 and shadow_yes >= max(1, (total_posts + 1) // 2) and total_views < 10)
+    ):
         verdict = "shadowbanned"
-        verdict_label = "🚨 В ТЕНИ (SHADOWBAN)"
+        verdict_label = "🚨 В тени" if active_2048 == 0 else "🚨 Огран 2048"
     elif shadow_yes > 0 or shadow_suspect > 0 or hidden_public_count > 0 or reviewing_2048 > 0:
         verdict = "partial_shadow"
-        verdict_label = "⚠️ Частичная тень / Проверка"
+        verdict_label = "⚠️ Частично скрыто" if hidden_public_count > 0 else "⚠️ Есть вопросы"
     else:
         verdict = "clean"
-        verdict_label = "✅ БЕЗ ТЕНИ"
+        verdict_label = "✅ Без тени"
 
     result: dict[str, Any] = {
         "account_id": account_id,
@@ -464,8 +511,7 @@ async def check_account_shadowban(
         "copy_line": copy_line,
         "verdict": verdict,
         "verdict_label": verdict_label,
-        "is_shadowbanned": verdict in ("shadowbanned", "partial_shadow"),
-        "health_score": score,
+        "is_shadowbanned": verdict == "shadowbanned",
         "reasons": reasons,
         "followers": followers,
         "following": following,
@@ -479,7 +525,10 @@ async def check_account_shadowban(
         "shadow_clean_posts": shadow_clean,
         "shadow_suspect_posts": shadow_suspect,
         "shadow_yes_posts": shadow_yes,
+        "studio_flagged_count": studio_flagged_count,
+        "studio_can_submit_count": studio_can_submit_count,
         "regions": regions,
+        "post_urls": post_urls,
         "audit_health": audit_health,
         "active_2048": active_2048,
         "reviewing_2048": reviewing_2048,
@@ -567,7 +616,6 @@ async def run_batch_shadowban_check(
                     "verdict": "not_found",
                     "verdict_label": "💀 Ошибка проверки",
                     "is_shadowbanned": False,
-                    "health_score": 0,
                     "reasons": [str(exc)[:140]],
                     "public_posts_count": 0,
                     "hidden_public_count": 0,
@@ -577,7 +625,10 @@ async def run_batch_shadowban_check(
                     "shadow_clean_posts": 0,
                     "shadow_suspect_posts": 0,
                     "shadow_yes_posts": 0,
+                    "studio_flagged_count": 0,
+                    "studio_can_submit_count": 0,
                     "regions": [],
+                    "post_urls": [],
                     "audit_health": "unknown",
                     "active_2048": 0,
                     "reviewing_2048": 0,

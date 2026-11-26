@@ -1141,11 +1141,30 @@ async def test_pro_shadowban_checker_detects_real_tiktok_flags(tmp_path: Path) -
         "risk_infos": {"risk_sink": True, "warn": False, "type": 0},
     }
 
-    r_clean = inspect_aweme_shadow_signals(clean_item, username="clean_u", now_ts=now)
+    r_clean = inspect_aweme_shadow_signals(
+        clean_item,
+        username="clean_u",
+        studio_flagged=True,
+        studio_penalty_info={"reason_labels": ["UNORIGINAL_NR"], "appeal_status_label": "CAN_SUBMIT", "can_submit": True},
+        now_ts=now,
+    )
+    # A live post with 145 views and clean public flags MUST stay "Тень: Нет" even if Studio has UNORIGINAL_NR note!
     assert r_clean["shadow_code"] == "no"
     assert r_clean["shadow_label"] == "Нет"
+    assert "UNORIGINAL_NR" in r_clean["studio_note"]
+    assert r_clean["studio_can_submit"] is True
     assert r_clean["moderation_label"] == "Пройдена"
     assert r_clean["region_flag"] == "🇺🇸"
+
+    # Also verify anti_unoriginal preset + stratified copy_index produces distinct renders
+    from kintaro_auto.uniquifier import uniquify_photo_bytes
+
+    src_buf = tmp_path / "src_anti.jpg"
+    Image.new("RGB", (400, 700), (60, 120, 200)).save(src_buf, format="JPEG")
+    raw_b = src_buf.read_bytes()
+    b0 = uniquify_photo_bytes(raw_b, mode="anti_unoriginal", copy_index=0, rng=random.Random(101))
+    b1 = uniquify_photo_bytes(raw_b, mode="anti_unoriginal", copy_index=1, rng=random.Random(101))
+    assert b0 != b1 and len(b0) > 1000 and len(b1) > 1000
 
     r_shadow = inspect_aweme_shadow_signals(shadow_item, username="bad_u", now_ts=now)
     assert r_shadow["shadow_code"] == "yes"

@@ -314,6 +314,10 @@ class AutomationPipeline:
                             poll_interval_sec=1.0,
                             log_fn=lambda m: logger.info("[%s] %s", account.account_id, m),
                         )
+                        if not otp_code:
+                            raise RuntimeError(
+                                f"[{account.account_id}] Таймаут ожидания нового 6-значного кода TikTok в Outlook ({account.email})."
+                            )
                         return await self.confirm_signin_code(account, otp_code)
 
                     if need_imap and account.email and account.mail_password:
@@ -336,6 +340,10 @@ class AutomationPipeline:
                             poll_interval_sec=2.5,
                             log_fn=lambda m: logger.info("[%s] %s", account.account_id, m),
                         )
+                        if not otp_code:
+                            raise RuntimeError(
+                                f"[{account.account_id}] Таймаут ожидания нового 6-значного кода TikTok в Outlook ({account.email})."
+                            )
                         return await self.confirm_signin_code(account, otp_code)
 
                     if code_provider is None:
@@ -1205,6 +1213,7 @@ class AutomationPipeline:
                                         rng=self._rng,
                                         mode_override=campaign.photo_mode,
                                         overrides=campaign.uniquifier_overrides or None,
+                                        copy_index=copy_num - 1,
                                     )
                                     temp_files.extend(med_list)
                                     try:

@@ -9,6 +9,7 @@ import shutil
 import tempfile
 import time
 import uuid
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -24,11 +25,13 @@ from kintaro_auto.appeals import (
     WATCH_POLL_SECONDS,
     AccountAuditResult,
     audit_account_restrictions,
+    classify_appeal_folder,
     extract_cookie_dict,
     get_sorted_folders_summary,
     probe_proxy_geo,
     remove_account_restrictions,
     set_post_visibility,
+    sort_account_into_folder,
     wait_and_appeal_settle,
 )
 from kintaro_auto.captions import prepare_description_and_mentions
@@ -187,6 +190,7 @@ class DashboardHub:
         self.watchdog_task: asyncio.Task[None] | None = None
         self.watchdog_enabled: bool = False
         self.watchdog_hide_rejected: bool = True
+        self.watchdog_threads: int = 5
         self.watchdog_cycles: int = 0
         self.watchdog_next_run_ts: float | None = None
 
@@ -339,46 +343,138 @@ class DashboardHub:
         )
         return aud_dict
 
+    def start_watchdog(self, *, hide_rejected: bool | None = None, threads: int | None = None) -> bool:
+        if hide_rejected is not None:
+            self.watchdog_hide_rejected = hide_rejected
+        if threads is not None:
+            self.watchdog_threads = max(1, min(10, int(threads)))
+        if self.watchdog_enabled and self.watchdog_task and not self.watchdog_task.done():
+            return False
+        self.watchdog_enabled = True
+        self.watchdog_task = asyncio.create_task(self._watchdog_loop())
+        return True
+
+    def stop_watchdog(self) -> bool:
+        was_on = self.watchdog_enabled
+        self.watchdog_enabled = False
+        self.watchdog_next_run_ts = None
+        if self.watchdog_task and not self.watchdog_task.done():
+            self.watchdog_task.cancel()
+        return was_on
+
     async def _watchdog_loop(self) -> None:
-        self.push_event("Фоновый сторож (Watchdog) запущен: опрос по кукам раз в 95–165 сек.", "success", kind="watchdog")
+        self.push_event(
+            f"Фоновый сторож (Watchdog) запущен: авто-опрос по кукам в {self.watchdog_threads} пот. каждые 70–115 сек. (0$).",
+            "success",
+            kind="watchdog",
+        )
+        priority_map = {"action_required": 0, "appealing": 1, "eligible": 3}
         try:
             while self.watchdog_enabled:
+                self.watchdog_next_run_ts = None
                 self.watchdog_cycles += 1
+                self.reload_env()
                 targets = [a for a in self.store.list_accounts() if a.authenticated and a.device]
-                jid = self.start_job(f"Watchdog #{self.watchdog_cycles}", total=max(1, len(targets)))
-                try:
-                    for acc in targets:
+
+                def _prio(acc: AccountRecord) -> tuple[int, str]:
+                    cached = self.audit_cache.get(acc.account_id)
+                    if not cached:
+                        return (2, acc.account_id)
+                    return (priority_map.get(str(cached.get("account_health") or ""), 2), acc.account_id)
+
+                targets.sort(key=_prio)
+                eff_threads = max(1, min(10, int(self.watchdog_threads)))
+                jid = self.start_job(
+                    f"Сторож #{self.watchdog_cycles} ({eff_threads} пот.)",
+                    total=max(1, len(targets)),
+                    threads=eff_threads,
+                )
+                sem = asyncio.Semaphore(eff_threads)
+
+                async def _poll_one(idx: int, aid: str) -> None:
+                    if not self.watchdog_enabled:
+                        return
+                    if idx < eff_threads and eff_threads > 1:
+                        await asyncio.sleep(idx * 0.4)
+                    async with sem:
                         if not self.watchdog_enabled:
-                            break
+                            return
+                        self.worker_enter(jid, aid)
                         try:
+                            acc = self.store.load_account(aid)
+                            if not acc.authenticated or not acc.device:
+                                return
+                            prev_cached = self.audit_cache.get(aid) or {}
+                            prev_health = prev_cached.get("account_health")
                             summary = await remove_account_restrictions(
-                                acc, hide_rejected=self.watchdog_hide_rejected
+                                acc,
+                                hide_rejected=self.watchdog_hide_rejected,
+                                verify_proxy_trace=False,
                             )
                             self.store.save_account(acc)
                             if summary.audit:
                                 ad = asdict(summary.audit)
+                                if not ad.get("proxy_country") and prev_cached.get("proxy_country"):
+                                    ad["proxy_country"] = prev_cached["proxy_country"]
+                                if not ad.get("proxy_ip") and prev_cached.get("proxy_ip"):
+                                    ad["proxy_ip"] = prev_cached["proxy_ip"]
                                 ad["audited_at"] = datetime.now().strftime("%H:%M:%S")
-                                self.audit_cache[acc.account_id] = ad
+                                self.audit_cache[aid] = ad
                                 self._save_audit_cache()
-                            sent = summary.notice_appeals_verified + summary.post_appeals_verified
-                            if sent > 0 or summary.posts_hidden > 0:
-                                self.push_event(
-                                    f"[{acc.account_id}] Снято флагов: {sent}, скрыто FAILED в Private: {summary.posts_hidden}",
-                                    "success",
-                                    kind="audit_updated",
-                                )
+                                fkey, _ftitle = classify_appeal_folder(summary.audit)
+                                sort_account_into_folder(Path(self.cfg.state_dir), fkey, acc)
+                                sent = summary.notice_appeals_verified + summary.post_appeals_verified
+                                if sent > 0 or summary.posts_hidden > 0:
+                                    self.push_event(
+                                        f"[{aid}] ⚡ Сторож: снято флагов {sent}, скрыто FAILED: {summary.posts_hidden} → {summary.audit.account_health}",
+                                        "success",
+                                        kind="audit_updated",
+                                    )
+                                elif prev_health != summary.audit.account_health:
+                                    self.push_event(
+                                        f"[{aid}] Сторож: статус {prev_health or '—'} → {summary.audit.account_health}",
+                                        "success" if summary.audit.account_health == "eligible" else "warn",
+                                        kind="audit_updated",
+                                    )
+                        except asyncio.CancelledError:
+                            raise
                         except Exception as exc:
-                            self.push_event(f"[{acc.account_id}] Ошибка сторожа: {exc}", "error")
+                            self.push_event(f"[{aid}] Ошибка сторожа: {exc}", "error")
                         finally:
+                            self.worker_exit(jid, aid)
                             self.step_job(jid)
+
+                try:
+                    if targets:
+                        await asyncio.gather(*(_poll_one(i, a.account_id) for i, a in enumerate(targets)))
                 finally:
                     self.end_job(jid)
 
                 if not self.watchdog_enabled:
                     break
-                wait_s = random.uniform(*WATCH_POLL_SECONDS)
+
+                n_clean = sum(
+                    1
+                    for a in targets
+                    if (self.audit_cache.get(a.account_id) or {}).get("account_health") == "eligible"
+                )
+                n_app = sum(
+                    1
+                    for a in targets
+                    if (self.audit_cache.get(a.account_id) or {}).get("account_health") == "appealing"
+                )
+                n_act = sum(
+                    1
+                    for a in targets
+                    if (self.audit_cache.get(a.account_id) or {}).get("account_health") == "action_required"
+                )
+                wait_s = random.uniform(70.0, 115.0)
                 self.watchdog_next_run_ts = time.time() + wait_s
-                self.push_event(f"[Watchdog] Следующий проход через {wait_s:.0f} сек.", "info", kind="watchdog")
+                self.push_event(
+                    f"[Сторож #{self.watchdog_cycles}] Опрошено {len(targets)} акк. ({eff_threads} пот.): чистых {n_clean}, проверка {n_app}, огран {n_act}. Следующий через {wait_s:.0f}с.",
+                    "info",
+                    kind="audit_updated",
+                )
                 await asyncio.sleep(wait_s)
         except asyncio.CancelledError:
             pass
@@ -466,6 +562,7 @@ class SpintaxPreviewRequest(BaseModel):
 class WatchdogToggleRequest(BaseModel):
     enabled: bool
     hide_rejected: bool = True
+    threads: int | None = None
 
 
 class SpyRequest(BaseModel):
@@ -587,9 +684,28 @@ def _parse_proxy_pool(proxies_text: str, fallback_proxy: str) -> list[str]:
     return pool
 
 
-def create_web_app(config_path: Path | None = None) -> FastAPI:
+def create_web_app(
+    config_path: Path | None = None,
+    *,
+    auto_start_watchdog: bool = False,
+) -> FastAPI:
     hub = DashboardHub(config_path)
-    app = FastAPI(title="Kintaro Auto · TikTok Farm OS", version="5.0.0")
+
+    @asynccontextmanager
+    async def _lifespan(_app: FastAPI):
+        if auto_start_watchdog:
+            hub.start_watchdog()
+        try:
+            yield
+        finally:
+            hub.stop_watchdog()
+            if hub.watchdog_task:
+                try:
+                    await hub.watchdog_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+    app = FastAPI(title="Kintaro Auto · TikTok Farm OS", version="5.0.0", lifespan=_lifespan)
     if STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -640,6 +756,7 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
             "watchdog": {
                 "enabled": hub.watchdog_enabled,
                 "hide_rejected": hub.watchdog_hide_rejected,
+                "threads": hub.watchdog_threads,
                 "cycles": hub.watchdog_cycles,
                 "next_in_sec": max(0, int(hub.watchdog_next_run_ts - time.time()))
                 if hub.watchdog_next_run_ts
@@ -1546,15 +1663,11 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
 
     @app.post("/api/watchdog")
     async def toggle_watchdog(req: WatchdogToggleRequest) -> dict[str, Any]:
-        hub.watchdog_hide_rejected = req.hide_rejected
-        if req.enabled and not hub.watchdog_enabled:
-            hub.watchdog_enabled = True
-            hub.watchdog_task = asyncio.create_task(hub._watchdog_loop())
-        elif not req.enabled and hub.watchdog_enabled:
-            hub.watchdog_enabled = False
-            if hub.watchdog_task:
-                hub.watchdog_task.cancel()
-        return {"ok": True, "enabled": hub.watchdog_enabled}
+        if req.enabled:
+            hub.start_watchdog(hide_rejected=req.hide_rejected, threads=req.threads)
+        else:
+            hub.stop_watchdog()
+        return {"ok": True, "enabled": hub.watchdog_enabled, "threads": hub.watchdog_threads}
 
     # ── Merged swegby Studio Endpoints (Campaign v4, Presets, Uniquifier Preview, Restart, Clean, Spy, TOTP) ──
 

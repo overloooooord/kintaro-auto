@@ -166,8 +166,16 @@ function renderAll() {
   // Watchdog
   const wd = STATE.watchdog || {};
   document.getElementById('wdDot').className = 'dot' + (wd.enabled ? ' on' : '');
-  document.getElementById('wdLabel').textContent = wd.enabled ? 'ON' : 'OFF';
-  document.getElementById('wdLabel').style.color = wd.enabled ? 'var(--ok)' : 'var(--muted)';
+  const wdLbl = document.getElementById('wdLabel');
+  if (wd.enabled) {
+    wdLbl.textContent = wd.next_in_sec != null
+      ? `ON · ${wd.next_in_sec}с`
+      : `ON · #${wd.cycles || 1}`;
+    wdLbl.style.color = 'var(--ok)';
+  } else {
+    wdLbl.textContent = 'OFF';
+    wdLbl.style.color = 'var(--muted)';
+  }
 
   // Prune stale selections
   const idSet = new Set(accs.map(a => a.account_id));
@@ -221,6 +229,14 @@ function renderAccounts() {
     const handle = aud?.uniq_id || a.username || a.account_id;
     const sel = SELECTED.has(a.account_id);
     const vios = (aud?.notice_violations || []).filter(v => v.can_appeal || v.status_code === 1).length;
+    const revVios = (aud?.notice_violations || []).filter(v => v.status_code === 4).length;
+    const failVios = (aud?.notice_violations || []).filter(v => v.status_code === 7).length;
+    const audTime = aud?.audited_at ? String(aud.audited_at).slice(0, 5) : '';
+    const vioTag = vios
+      ? `<span class="mono" style="font-size:11px;color:var(--err);margin-left:5px;">(${vios} орг.)</span>`
+      : (failVios
+          ? `<span class="mono" style="font-size:11px;color:var(--err);margin-left:5px;" title="Апелляция отклонена TikTok">(${failVios} откл.)</span>`
+          : (revVios ? `<span class="mono" style="font-size:11px;color:var(--warn);margin-left:5px;" title="На рассмотрении TikTok">(${revVios})</span>` : ''));
     const postsTxt = aud ? `${aud.total_posts} · <strong>${(aud.total_views || 0).toLocaleString()}</strong>` : '—';
     const geoTxt = aud
       ? `${esc(aud.reg_country || '?')}→${esc(aud.current_region || '?')} · ${esc(aud.proxy_country || 'OK')}`
@@ -233,8 +249,8 @@ function renderAccounts() {
         <div class="mono muted" style="font-size:11px;">${esc(a.email || a.account_id)}</div>
       </td>
       <td>
-        ${statusBadge(a)}
-        ${vios ? `<span class="mono" style="font-size:11px;color:var(--err);margin-left:5px;">(${vios} орг.)</span>` : ''}
+        <div>${statusBadge(a)}${vioTag}</div>
+        ${audTime ? `<div class="mono muted" style="font-size:10.5px;margin-top:2px;">обн. ${esc(audTime)}</div>` : ''}
       </td>
       <td class="mono" style="font-size:12px;">${postsTxt}</td>
       <td class="mono muted" style="font-size:11.5px;">${geoTxt}</td>
@@ -279,7 +295,7 @@ async function runBulk(action, extra = {}) {
   if (action === 'delete' && !confirm(`Удалить ${ids.length} аккаунтов из базы?`)) return;
   if (action === 'clean_posts' && !confirm(`Удалить ВСЕ старые посты на ${ids.length} аккаунтах?`)) return;
   try {
-    await apiPost('/api/bulk-action', { account_ids: ids, action, hide_rejected: true, ...extra });
+    await apiPost('/api/bulk-action', { account_ids: ids, action, hide_rejected: true, threads: 5, ...extra });
     toast(`Запущено (${ids.length} акк.)`, 'success');
     if (action === 'delete') clearSelection();
   } catch (e) { toast(e.message, 'err'); }
@@ -333,7 +349,7 @@ function renderDrawer() {
       <div style="display:flex;flex-direction:column;gap:6px;max-height:170px;overflow-y:auto;">
         ${vios.slice(0, 15).map(v => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;">
           <span>${esc(v.title)} <span class="mono muted">#${esc(v.punish_id.slice(-6))}</span></span>
-          <span class="badge ${v.can_appeal ? 'b-err' : 'b-warn'}">${esc(v.status_label.split(' ')[0])}</span>
+          <span class="badge ${v.can_appeal || v.status_code === 7 ? 'b-err' : (v.status_code === 6 ? 'b-ok' : 'b-warn')}">${esc(v.status_label.split(' ')[0])}</span>
         </div>`).join('')}
         ${vios.length > 15 ? `<div class="muted" style="font-size:11.5px;">+ ещё ${vios.length - 15}</div>` : ''}
       </div>
@@ -386,13 +402,13 @@ function renderDrawer() {
 // ── Single-Account Actions ───────────────────────────────────
 async function auditAll() {
   const b = document.getElementById('btnTopAudit'); b.disabled = true;
-  try { await apiPost('/api/audit-all'); toast('Аудит завершён', 'success'); await fetchState(); }
+  try { await apiPost('/api/audit-all?threads=5'); toast('Аудит завершён', 'success'); await fetchState(); }
   catch (e) { toast(e.message, 'err'); } finally { b.disabled = false; }
 }
 async function appealAll() {
   const b = document.getElementById('btnTopAppeal'); b.disabled = true;
   try {
-    await apiPost('/api/appeal-all', { hide_rejected: true, appeal_studio_posts: false, settle: false });
+    await apiPost('/api/appeal-all', { hide_rejected: true, appeal_studio_posts: false, settle: false, threads: 5 });
     toast('Снятие огранов завершено', 'success');
     await fetchState();
   } catch (e) { toast(e.message, 'err'); } finally { b.disabled = false; }
@@ -469,8 +485,8 @@ async function saveDrawerProfile(aid) {
 async function toggleWatchdog() {
   const next = !(STATE.watchdog && STATE.watchdog.enabled);
   try {
-    await apiPost('/api/watchdog', { enabled: next, hide_rejected: true });
-    toast(next ? 'Сторож включён' : 'Сторож выключен', next ? 'success' : 'warn');
+    await apiPost('/api/watchdog', { enabled: next, hide_rejected: true, threads: 5 });
+    toast(next ? 'Сторож включён (5 пот.)' : 'Сторож выключен', next ? 'success' : 'warn');
     await fetchState();
   } catch (e) { toast(e.message, 'err'); }
 }
@@ -742,6 +758,7 @@ async function submitBatchImport() {
       auto_clean_posts: document.getElementById('impAutoClean').checked,
       auto_appeal: document.getElementById('impAutoAppeal').checked,
       hide_rejected: true,
+      threads: 5,
     });
     toast(`Импортировано: ${r.imported.length}`, 'success');
     document.getElementById('impLines').value = '';

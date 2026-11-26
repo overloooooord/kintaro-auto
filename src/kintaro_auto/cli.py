@@ -1196,6 +1196,10 @@ def run_web_dashboard(
     host: Annotated[str, typer.Option("--host", help="Хост веб-панели")] = "127.0.0.1",
     port: Annotated[int, typer.Option("--port", "-p", help="Порт веб-панели")] = 8080,
     config: Annotated[Path | None, typer.Option("--config", "-c")] = None,
+    auto_poll: Annotated[
+        bool,
+        typer.Option("--auto-poll/--no-auto-poll", help="Автоматически запустить 5-поточный авто-опрос и снятие огранов 24/7"),
+    ] = True,
 ) -> None:
     """Запустить веб-панель управления KINTARO FARM OS v5.0 (Campaign + Unban Queue + Spy + Outlook Hub)."""
     import uvicorn
@@ -1203,9 +1207,15 @@ def run_web_dashboard(
 
     console.print(
         f"[bold green]🚀 Веб-панель KINTARO FARM OS v5.0 запущена:[/bold green] "
-        f"[bold cyan]http://{host}:{port}[/bold cyan]"
+        f"[bold cyan]http://{host}:{port}[/bold cyan] "
+        f"([dim]Сторож 24/7: {'ON · 5 пот.' if auto_poll else 'OFF'}[/dim])"
     )
-    uvicorn.run(create_web_app(config), host=host, port=port, log_level="warning")
+    uvicorn.run(
+        create_web_app(config, auto_start_watchdog=auto_poll),
+        host=host,
+        port=port,
+        log_level="warning",
+    )
 
 
 if __name__ == "__main__":

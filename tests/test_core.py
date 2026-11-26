@@ -1209,3 +1209,57 @@ async def test_pro_shadowban_checker_detects_real_tiktok_flags(tmp_path: Path) -
     assert batch["counts"]["shadowbanned"] == 1
     assert "🌟 Тень: Нет" in batch["results"][0]["telegram_text"]
     assert "🌟 Тень: Да" in batch["results"][1]["telegram_text"]
+
+
+def test_web_watchdog_autostart_and_external_cache_reload(tmp_path: Path) -> None:
+    import time
+    from fastapi.testclient import TestClient
+    from kintaro_auto.web import create_web_app
+
+    cfg_path = tmp_path / "config.toml"
+    sdir = tmp_path / "state"
+    cfg_path.write_text(f'state_dir = "{sdir}"\n', encoding="utf-8")
+
+    # 1. Default auto_start_watchdog=False keeps watchdog OFF in unit tests
+    app_off = create_web_app(cfg_path)
+    with TestClient(app_off) as tc:
+        st = tc.get("/api/state").json()
+        assert st["watchdog"]["enabled"] is False
+        assert st["watchdog"]["threads"] == 5
+
+        # External audit_cache.json write is picked up live by reload_env()
+        store = StateStore(sdir)
+        store.save_account(
+            AccountRecord(
+                account_id="ext_u1",
+                username="ext_u1",
+                proxy="socks5://u:p@127.0.0.1:1080",
+                region="US",
+                authenticated=True,
+                device={"cookies": {"sessionid": "s1"}},
+            )
+        )
+        cache_file = sdir / "audit_cache.json"
+        time.sleep(0.02)
+        cache_file.write_text(
+            json.dumps({"ext_u1": {"account_health": "eligible", "audited_at": "04:55:00", "total_posts": 6, "total_views": 320}}),
+            encoding="utf-8",
+        )
+        st2 = tc.get("/api/state").json()
+        assert len(st2["accounts"]) == 1
+        assert st2["accounts"][0]["audit"]["account_health"] == "eligible"
+        assert st2["accounts"][0]["audit"]["audited_at"] == "04:55:00"
+
+    # 2. auto_start_watchdog=True starts 5-thread watchdog via FastAPI lifespan & stops cleanly on exit
+    sdir2 = tmp_path / "state_on"
+    cfg_path2 = tmp_path / "config2.toml"
+    cfg_path2.write_text(f'state_dir = "{sdir2}"\n', encoding="utf-8")
+    app_on = create_web_app(cfg_path2, auto_start_watchdog=True)
+    with TestClient(app_on) as tc2:
+        time.sleep(0.05)
+        st_on = tc2.get("/api/state").json()
+        assert st_on["watchdog"]["enabled"] is True
+        assert st_on["watchdog"]["threads"] == 5
+        assert st_on["watchdog"]["cycles"] >= 1
+        r_stop = tc2.post("/api/watchdog", json={"enabled": False})
+        assert r_stop.status_code == 200 and r_stop.json()["enabled"] is False

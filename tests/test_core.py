@@ -601,6 +601,11 @@ def test_hashtag_randomizer_sticky_proxy_geo_and_live_totp() -> None:
     pinned_us = allocate_sticky_proxy(raw_px, target_country="US", lifetime="60m", preserve_existing_session=False)
     assert "_country-US_session-" in pinned_us
 
+    flash_px = "http://demo01-country-US:demopass@lite.flashproxy.io:6969"
+    pinned_flash = allocate_sticky_proxy(flash_px, target_country="", preserve_existing_session=False)
+    assert "-country-US-session-" in pinned_flash
+    assert allocate_sticky_proxy(pinned_flash, preserve_existing_session=True) == pinned_flash
+
     totp = generate_live_totp("JBSWY3DPEHPK3PXP", timestamp=1700000000)
     assert len(totp["code"]) == 6 and totp["code"].isdigit() and 1 <= totp["remaining_sec"] <= 30
 

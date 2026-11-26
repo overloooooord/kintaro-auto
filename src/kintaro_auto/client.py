@@ -275,7 +275,11 @@ class KintaroClient:
         )
 
     async def signin_username_send_code(
-        self, account: AccountRecord, code: str
+        self,
+        account: AccountRecord,
+        code: str,
+        *,
+        proxy_override: str | None = None,
     ) -> dict[str, Any]:
         if not account.pending_verify:
             raise RuntimeError(
@@ -292,6 +296,7 @@ class KintaroClient:
             "/v1/auth/signin/username/send_code",
             account=account,
             json_body=body,
+            proxy_override=proxy_override,
         )
 
     async def signin_email(
@@ -325,7 +330,11 @@ class KintaroClient:
         )
 
     async def signin_email_send_code(
-        self, account: AccountRecord, code: str
+        self,
+        account: AccountRecord,
+        code: str,
+        *,
+        proxy_override: str | None = None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
             "email": account.email,
@@ -339,6 +348,7 @@ class KintaroClient:
                 "/v1/auth/signin/email/send_code",
                 account=account,
                 json_body=body,
+                proxy_override=proxy_override,
             )
         except KintaroApiError:
             if not account.pending_verify:
@@ -353,6 +363,7 @@ class KintaroClient:
                 "/v1/auth/signin/email/send_code",
                 account=account,
                 json_body=body_with_verify,
+                proxy_override=proxy_override,
             )
 
     async def signin_mobile(self, account: AccountRecord) -> dict[str, Any]:

@@ -135,7 +135,17 @@ class AutomationPipeline:
                     f"Подожди ещё {rem_min:.0f} мин, чтобы не продлевать блокировку и не тратить $0.05."
                 )
 
-        login_region = (account.auth_region or "DE" if account.totp_token and not account.auth_region else (account.auth_region or account.region)).upper()
+        # Ensure sticky residential IP & clean device state before an unauthenticated login handshake
+        if not account.authenticated:
+            account.proxy = allocate_sticky_proxy(account.proxy, preserve_existing_session=True)
+            if account.device is not None and not account.pending_verify and account.auth_method != "device_only":
+                account.device = None
+                self.store.save_account(account)
+
+        login_region = (
+            account.auth_region
+            or ("DE" if (account.totp_token or account.use_outlook_hub) else account.region)
+        ).upper()
 
         # Step A & Mailbox Prep (run Outlook Hub / IMAP prep in parallel with /v1/device/register!)
         pre_outlook_token = ""
@@ -318,7 +328,27 @@ class AutomationPipeline:
                             raise RuntimeError(
                                 f"[{account.account_id}] Таймаут ожидания нового 6-значного кода TikTok в Outlook ({account.email})."
                             )
-                        return await self.confirm_signin_code(account, otp_code)
+                        try:
+                            return await self.confirm_signin_code(account, otp_code, proxy_override=login_proxy)
+                        except KintaroApiError as c_exc:
+                            c_data = c_exc.payload.get("data") if isinstance(c_exc.payload, dict) and isinstance(c_exc.payload.get("data"), dict) else {}
+                            c_err = c_data.get("error_code")
+                            if cluster_attempt == 0 and (c_err == 1011 or "ri_report" in str(c_exc)):
+                                fallback_cc = account.region if login_region != account.region else "US"
+                                logger.warning(
+                                    "[%s] send_code вернул %s на кластере %s — перерегистрирую устройство под %s и повторяю вход...",
+                                    account.account_id,
+                                    c_err or "ri_report",
+                                    login_region,
+                                    fallback_cc,
+                                )
+                                account.auth_region = fallback_cc
+                                account.pending_verify = None
+                                account.device = None
+                                account.proxy = allocate_sticky_proxy(account.proxy, preserve_existing_session=False)
+                                await self._register_and_boot_device(account, fallback_cc)
+                                continue
+                            raise
 
                     if need_imap and account.email and account.mail_password:
                         from kintaro_auto.mail_imap import wait_for_imap_code
@@ -344,12 +374,32 @@ class AutomationPipeline:
                             raise RuntimeError(
                                 f"[{account.account_id}] Таймаут ожидания нового 6-значного кода TikTok в Outlook ({account.email})."
                             )
-                        return await self.confirm_signin_code(account, otp_code)
+                        try:
+                            return await self.confirm_signin_code(account, otp_code, proxy_override=login_proxy)
+                        except KintaroApiError as c_exc:
+                            c_data = c_exc.payload.get("data") if isinstance(c_exc.payload, dict) and isinstance(c_exc.payload.get("data"), dict) else {}
+                            c_err = c_data.get("error_code")
+                            if cluster_attempt == 0 and (c_err == 1011 or "ri_report" in str(c_exc)):
+                                fallback_cc = account.region if login_region != account.region else "US"
+                                logger.warning(
+                                    "[%s] send_code вернул %s на кластере %s — перерегистрирую устройство под %s и повторяю вход...",
+                                    account.account_id,
+                                    c_err or "ri_report",
+                                    login_region,
+                                    fallback_cc,
+                                )
+                                account.auth_region = fallback_cc
+                                account.pending_verify = None
+                                account.device = None
+                                account.proxy = allocate_sticky_proxy(account.proxy, preserve_existing_session=False)
+                                await self._register_and_boot_device(account, fallback_cc)
+                                continue
+                            raise
 
                     if code_provider is None:
                         raise
                     code = code_provider(account)
-                    return await self.confirm_signin_code(account, code)
+                    return await self.confirm_signin_code(account, code, proxy_override=login_proxy)
                 except KintaroApiError as exc:
                     data = (
                         exc.payload.get("data")
@@ -408,19 +458,25 @@ class AutomationPipeline:
 
         return account
 
-    async def confirm_signin_code(self, account: AccountRecord, code: str) -> AccountRecord:
+    async def confirm_signin_code(
+        self,
+        account: AccountRecord,
+        code: str,
+        *,
+        proxy_override: str | None = None,
+    ) -> AccountRecord:
         if account.auth_method == "username":
-            await self.client.signin_username_send_code(account, code)
+            await self.client.signin_username_send_code(account, code, proxy_override=proxy_override)
         elif account.auth_method == "email":
             try:
-                await self.client.signin_email_send_code(account, code)
+                await self.client.signin_email_send_code(account, code, proxy_override=proxy_override)
             except KintaroApiError:
                 if account.username and account.password and account.pending_verify:
                     logger.info(
                         "[%s] Повтор отправки кода через /v1/auth/signin/username/send_code...",
                         account.account_id,
                     )
-                    await self.client.signin_username_send_code(account, code)
+                    await self.client.signin_username_send_code(account, code, proxy_override=proxy_override)
                 else:
                     raise
         elif account.auth_method == "mobile":

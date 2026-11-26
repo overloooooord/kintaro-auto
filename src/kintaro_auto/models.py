@@ -359,14 +359,21 @@ def allocate_sticky_proxy(
     preserve_existing_session: bool = True,
 ) -> str:
     """
-    Pins an 8-char sticky residential session (`_session-xxxxxxxx_lifetime-60m`) on `bpproxy.at`
-    so login, uploads, restarts, and 3-stage Auto-Appeal share one constant IP.
-    Never changes `_country-XX` unless `target_country` is explicitly passed.
+    Pins an 8-char sticky residential session on `bpproxy.at` (`_session-xxxxxxxx_lifetime-60m`)
+    and `flashproxy.io` (`-session-xxxxxxxx`) so login, uploads, restarts, and 3-stage Auto-Appeal
+    share one constant IP instead of rotating per request.
+    Never changes country unless `target_country` is explicitly passed.
     """
-    if not proxy or "bpproxy." not in proxy.lower():
+    if not proxy:
+        return proxy
+
+    low = proxy.lower()
+    is_bp = "bpproxy." in low
+    is_flash = "flashproxy." in low or bool(re.search(r"-country-[A-Za-z]{2}(?=$|[^A-Za-z])", proxy, flags=re.IGNORECASE))
+    if not is_bp and not is_flash:
         return swap_proxy_country(proxy, target_country) if target_country else proxy
 
-    if preserve_existing_session and re.search(r"_session-[a-zA-Z0-9]+", proxy):
+    if preserve_existing_session and re.search(r"[_-]session-[a-zA-Z0-9]+", proxy):
         m_cc = re.search(r"[_-]country[_-]([A-Za-z]{2})(?=$|[^A-Za-z])", proxy, flags=re.IGNORECASE)
         cur_cc = m_cc.group(1).upper() if m_cc else ""
         req_cc = target_country.strip().upper()
@@ -376,13 +383,27 @@ def allocate_sticky_proxy(
     px = swap_proxy_country(proxy, target_country) if target_country else proxy
     alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
     sid = "".join(secrets.choice(alphabet) for _ in range(8))
-    px_clean = re.sub(r"_session-[a-zA-Z0-9]+(?:_lifetime-[a-zA-Z0-9]+)?", "", px)
-    if re.search(r"_country-[A-Za-z]{2}", px_clean):
+
+    if is_bp:
+        px_clean = re.sub(r"_session-[a-zA-Z0-9]+(?:_lifetime-[a-zA-Z0-9]+)?", "", px)
+        if re.search(r"_country-[A-Za-z]{2}", px_clean):
+            return re.sub(
+                r"(_country-[A-Za-z]{2})",
+                rf"\1_session-{sid}_lifetime-{lifetime}",
+                px_clean,
+                count=1,
+            )
+        return px_clean
+
+    # Flashproxy (`user-country-US` -> `user-country-US-session-<sid>`)
+    px_clean = re.sub(r"-session-[a-zA-Z0-9]+(?:-(?:lifetime|ttl)-[a-zA-Z0-9]+)?", "", px)
+    if re.search(r"-country-[A-Za-z]{2}", px_clean, flags=re.IGNORECASE):
         return re.sub(
-            r"(_country-[A-Za-z]{2})",
-            rf"\1_session-{sid}_lifetime-{lifetime}",
+            r"(-country-[A-Za-z]{2})",
+            rf"\1-session-{sid}",
             px_clean,
             count=1,
+            flags=re.IGNORECASE,
         )
     return px_clean
 

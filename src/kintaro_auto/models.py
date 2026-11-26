@@ -550,6 +550,8 @@ class CampaignConfig(BaseModel):
         "Original content created and edited exclusively by our team.}"
     )
     sort_to_folders: bool = True
+    defer_post_appeal_to_queue: bool = False
+    appeal_queue_threads: int = Field(default=3, ge=1, le=15)
     max_upload_retries: int = Field(default=4, ge=1, le=6)
 
 

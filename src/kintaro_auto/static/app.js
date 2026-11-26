@@ -7,16 +7,118 @@ let DRAWER_ACCOUNT_ID = null;
 
 const SELECTED_IDS = new Set();
 const UPLOAD_TARGETS = new Set();
+const UNBAN_TARGETS = new Set();
 const SERVER_MEDIA_SELECTED = new Set();
 let UPLOAD_FILES = [];
 let CAMPAIGN_PRESETS = [];
 let ALL_LOGS = [];
+let LAST_UNBAN_SNAPSHOT = null;
+let LAST_SHADOW_CHECK = null;
+let SHADOW_FILTER = 'all';
+let GLOBAL_THREADS = Math.max(1, Math.min(15, parseInt(localStorage.getItem('kintaro_global_threads') || '5', 10) || 5));
 let previewTimer = null;
 let spintaxTimer = null;
+
+function getGlobalThreads() {
+  return GLOBAL_THREADS;
+}
+
+function updateCampaignBtnLabel() {
+  const btn = document.getElementById('btnRunCampaign');
+  if (!btn) return;
+  const th = Math.max(1, parseInt(document.getElementById('upThreads')?.value || String(GLOBAL_THREADS), 10) || 5);
+  const cp = Math.max(1, parseInt(document.getElementById('upCopies')?.value || '6', 10) || 6);
+  btn.textContent = `🚀 Запустить ${th}-поточную кампанию (${cp}× + 2048)`;
+  const pill = document.getElementById('navUploadThreadsPill');
+  if (pill) pill.textContent = `${th}×`;
+}
+
+function setCampThreads(n) {
+  const el = document.getElementById('upThreads');
+  if (el) el.value = String(Math.max(1, Math.min(20, parseInt(n, 10) || 5)));
+  updateCampaignBtnLabel();
+}
+
+function setGlobalThreads(val, syncForms = true) {
+  GLOBAL_THREADS = Math.max(1, Math.min(15, parseInt(val, 10) || 5));
+  try { localStorage.setItem('kintaro_global_threads', String(GLOBAL_THREADS)); } catch (_) {}
+  const inp = document.getElementById('globalThreadsInput');
+  if (inp) inp.value = String(GLOBAL_THREADS);
+  document.querySelectorAll('.thread-bar .tchip[data-gt]').forEach(btn => {
+    btn.classList.toggle('active', Number(btn.dataset.gt) === GLOBAL_THREADS);
+  });
+  const bb = document.getElementById('bulkThreadsBadge');
+  if (bb) bb.textContent = `⚡ ${GLOBAL_THREADS} пот.`;
+  if (syncForms) {
+    ['impThreads', 'upThreads', 'boostThreads', 'brThreads', 'cmtThreads', 'shadowThreads'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = String(GLOBAL_THREADS);
+    });
+    updateCampaignBtnLabel();
+  }
+}
+
+function renderActiveJobsStrip() {
+  const strip = document.getElementById('activeJobsStrip');
+  if (!strip) return;
+  const jobs = STATE.active_jobs || [];
+  const uq = LAST_UNBAN_SNAPSHOT || STATE.unban_queue;
+  const cards = [];
+
+  jobs.forEach(j => {
+    const pct = Math.min(100, Math.round(((j.done || 0) / Math.max(1, j.total || 1)) * 100));
+    const th = j.threads || 1;
+    const actW = j.active_workers || 0;
+    const actAccs = j.active_accounts || [];
+    cards.push(`<div class="job-card">
+      <div class="job-card-head">
+        <span style="display:flex;align-items:center;gap:8px;">
+          <span class="spin"></span>
+          <span>${esc(j.label)}</span>
+        </span>
+        <span style="display:flex;align-items:center;gap:6px;">
+          <span class="badge b-cyan mono">⚡ ${actW}/${th} пот.</span>
+          <span class="mono" style="font-size:11.5px;color:var(--text-dim);">${j.done}/${j.total} (${pct}%)</span>
+        </span>
+      </div>
+      <div class="bar-track" style="height:6px;"><div class="bar-fill" style="width:${pct}%"></div></div>
+      ${actAccs.length ? `<div class="job-workers-row">${actAccs.map(a => `<span class="worker-tag">@${esc(a)}</span>`).join('')}</div>` : ''}
+    </div>`);
+  });
+
+  if (uq && uq.running) {
+    const c = uq.counts || {};
+    const doneN = (c.done || 0) + (c.error || 0) + (c.stopped || 0);
+    const totN = Math.max(1, c.total || 1);
+    const pct = Math.min(100, Math.round((doneN / totN) * 100));
+    const waitingItems = (uq.items || []).filter(x => x.status === 'waiting');
+    cards.push(`<div class="job-card emerald">
+      <div class="job-card-head">
+        <span style="display:flex;align-items:center;gap:8px;cursor:pointer;" onclick="switchView('unban')">
+          <span class="spin"></span>
+          <span>⚡ Очередь снятия огранов 2048</span>
+        </span>
+        <span style="display:flex;align-items:center;gap:6px;">
+          <span class="badge b-ok mono">⚡ ${uq.active_workers || 0}/${uq.config?.threads || 1} пот.</span>
+          <span class="mono" style="font-size:11.5px;">${doneN}/${c.total || 0}</span>
+          <button class="btn btn-sm btn-ghost" style="padding:2px 7px;" onclick="switchView('unban')">Открыть →</button>
+          <button class="btn btn-sm btn-rose" style="padding:2px 7px;" onclick="stopUnbanQueue()">⏹</button>
+        </span>
+      </div>
+      <div class="bar-track" style="height:6px;"><div class="bar-fill" style="width:${pct}%"></div></div>
+      ${waitingItems.length ? `<div class="job-workers-row">${waitingItems.map(x => `<span class="worker-tag">@${esc(x.username || x.account_id)} · ${x.idle_sec || 0}/${x.quiet_sec || 0}с</span>`).join('')}</div>` : ''}
+    </div>`);
+  }
+
+  strip.classList.toggle('hidden', cards.length === 0);
+  strip.innerHTML = cards.join('');
+}
 
 const VIEW_TITLES = {
   fleet: 'Флот аккаунтов, папки и снятие огранов 2048',
   upload: 'Массовый Анти-Тень Залив (5 потоков · minimal_snow)',
+  unban: 'Снятие огранов 2048 · Очередь дожима волн (1 или N потоков)',
+  shadow: 'Чекер Тени и Модерации (FYP · is_nff_or_nr · risk_sink · 2048)',
   import: 'Пакетный импорт (Outlook Hub / IMAP / TOTP / x-device)',
   spy: 'Competitor Spy, клонирование крео и Комменты в ТОП #1',
   tools: 'Взаимный Буст постов и Массовый Оформитель профилей',
@@ -57,11 +159,46 @@ async function apiPost(url, body = {}) {
   });
 }
 
+async function copyTextToClipboard(text, okLabel = 'Скопировано в буфер обмена!') {
+  const value = String(text ?? '');
+  if (!value.trim()) {
+    toast('Нечего копировать — список пока пуст.', 'warn');
+    return false;
+  }
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(value);
+      toast(okLabel, 'success');
+      return true;
+    }
+  } catch (_) {}
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = value;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    ta.style.top = '0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    if (ok) {
+      toast(okLabel, 'success');
+      return true;
+    }
+  } catch (_) {}
+  toast('Не удалось скопировать автоматически — выдели текст вручную (Ctrl+C).', 'warn');
+  return false;
+}
+
 // ── Navigation & Views ───────────────────────────────────────
 function switchView(name) {
   ACTIVE_VIEW = name;
   Object.keys(VIEW_TITLES).forEach(v => {
-    document.getElementById('view-' + v).classList.toggle('hidden', v !== name);
+    const el = document.getElementById('view-' + v);
+    if (el) el.classList.toggle('hidden', v !== name);
   });
   document.querySelectorAll('.nav-item').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.view === name);
@@ -70,7 +207,9 @@ function switchView(name) {
   if (name === 'fleet') loadSortedFolders();
   if (name === 'analytics') { renderAnalytics(); loadAutoPilotJobs(); }
   if (name === 'settings') loadConfig();
-  if (name === 'upload') { renderUploadTargets(); loadPresets(); loadMediaLibrary(); }
+  if (name === 'upload') { renderUploadTargets(); loadPresets(); loadMediaLibrary(); loadUploadedCopyPreview(); }
+  if (name === 'unban') { renderUnbanPicker(); fetchUnbanQueue(); }
+  if (name === 'shadow') { loadLastShadowCheck(); }
   if (name === 'spy') populateSpySeedAccounts();
 }
 
@@ -118,7 +257,7 @@ function renderAll() {
   document.getElementById('navViewsPill').textContent = views > 999 ? (views / 1000).toFixed(1) + 'k' : views;
   document.getElementById('defProxyHint').textContent = STATE.default_proxy_masked || 'не задан';
 
-  // Active Jobs Pill
+  // Active Jobs Pill + Live Multi-Thread Monitor Strip
   const jobs = STATE.active_jobs || [];
   const jb = document.getElementById('jobsBadge');
   if (jobs.length) {
@@ -128,6 +267,7 @@ function renderAll() {
   } else {
     jb.classList.add('hidden');
   }
+  renderActiveJobsStrip();
 
   // Watchdog Pill
   const wd = STATE.watchdog || {};
@@ -135,13 +275,17 @@ function renderAll() {
   document.getElementById('wdStateTxt').textContent = wd.enabled ? `ON · #${wd.cycles}` : 'OFF';
   document.getElementById('wdBtn').textContent = wd.enabled ? 'Остановить сторожа' : 'Включить сторожа';
 
+  // Unban Queue Nav Pill
+  if (STATE.unban_queue) renderUnbanQueue(STATE.unban_queue);
+
   // Clean deleted IDs from selection
   const existingSet = new Set(accs.map(a => a.account_id));
   for (const id of Array.from(SELECTED_IDS)) if (!existingSet.has(id)) SELECTED_IDS.delete(id);
   updateBulkBar();
 
   renderFleet();
-  if (ACTIVE_VIEW === 'upload') renderUploadTargets();
+  if (ACTIVE_VIEW === 'upload') { renderUploadTargets(); loadUploadedCopyPreview(); }
+  if (ACTIVE_VIEW === 'unban') renderUnbanPicker();
   if (ACTIVE_VIEW === 'analytics') renderAnalytics();
   if (DRAWER_ACCOUNT_ID) {
     if (existingSet.has(DRAWER_ACCOUNT_ID)) renderDrawer();
@@ -362,11 +506,12 @@ async function runBulk(action, extra = {}) {
     await apiPost('/api/bulk-action', {
       account_ids: ids,
       action,
+      threads: getGlobalThreads(),
       hide_rejected: document.getElementById('chkHideRejected').checked,
       appeal_studio_posts: document.getElementById('chkIncludeStudio').checked,
       ...extra,
     });
-    toast(`Пакетная задача «${action}» запущена (${ids.length} акк.)`, 'success');
+    toast(`Пакетная задача «${action}» запущена (${ids.length} акк. · ${getGlobalThreads()} пот.)`, 'success');
     if (action === 'delete') clearSelection();
   } catch (e) { toast(e.message, 'err'); }
 }
@@ -406,6 +551,7 @@ function renderDrawer() {
   document.getElementById('drawerBody').innerHTML = `
     <!-- Quick Actions -->
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button class="btn btn-sm btn-emerald" onclick="copySingleAccountLine('${esc(a.account_id)}')">📋 Копировать строку</button>
       ${!a.authenticated ? `<button class="btn btn-sm btn-primary" onclick="authAccount('${esc(a.account_id)}')">🔑 Авторизоваться</button>` : ''}
       ${a.authenticated ? `<button class="btn btn-sm" onclick="auditAccount('${esc(a.account_id)}')">↻ Обновить аудит</button>` : ''}
       ${a.authenticated ? `<button class="btn btn-sm btn-emerald" onclick="appealAccount('${esc(a.account_id)}', false)">⚡ Снять все ограны</button>` : ''}
@@ -492,21 +638,24 @@ function renderDrawer() {
 // ── Single-Account Actions ───────────────────────────────────
 async function auditAll() {
   const b = document.getElementById('btnAuditAll'); b.disabled = true;
-  try { await apiPost('/api/audit-all'); toast('HTTP-аудит всех аккаунтов завершён', 'success'); await fetchState(); }
+  const th = getGlobalThreads();
+  try { await apiPost(`/api/audit-all?threads=${th}`); toast(`HTTP-аудит завершён (${th} пот.)`, 'success'); await fetchState(); }
   catch (e) { toast(e.message, 'err'); } finally { b.disabled = false; }
 }
 async function appealAll(settle = false) {
   const b = document.getElementById('btnAppealAll');
   const bs = document.getElementById('btnSettleAll');
+  const th = getGlobalThreads();
   b.disabled = true; if (bs) bs.disabled = true;
-  if (settle) toast('Ожидание всей волны огранов (до 4 мин)...', 'info');
+  if (settle) toast(`Ожидание всей волны огранов (${th} пот., до 4 мин)...`, 'info');
   try {
     await apiPost('/api/appeal-all', {
       hide_rejected: document.getElementById('chkHideRejected').checked,
       appeal_studio_posts: document.getElementById('chkIncludeStudio').checked,
       settle,
+      threads: th,
     });
-    toast('Снятие огранов завершено', 'success');
+    toast(`Снятие огранов завершено (${th} пот.)`, 'success');
     await fetchState();
   }
   catch (e) { toast(e.message, 'err'); } finally { b.disabled = false; if (bs) bs.disabled = false; }
@@ -632,6 +781,7 @@ async function runLinePreview() {
 
 async function submitBatchImport() {
   try {
+    const th = parseInt(document.getElementById('impThreads')?.value || String(getGlobalThreads()), 10) || 5;
     const r = await apiPost('/api/import-batch', {
       lines_text: document.getElementById('impLines').value,
       proxies_text: document.getElementById('impProxies').value,
@@ -640,8 +790,9 @@ async function submitBatchImport() {
       auto_clean_posts: document.getElementById('impAutoCleanPosts')?.checked || false,
       auto_appeal: document.getElementById('impAutoAppeal').checked,
       hide_rejected: document.getElementById('chkHideRejected').checked,
+      threads: th,
     });
-    toast(`Импортировано ${r.imported.length} акк. Конвейер запущен в фоне!`, 'success');
+    toast(`Импортировано ${r.imported.length} акк. Конвейер запущен в ${th} пот.!`, 'success');
     document.getElementById('impLines').value = '';
     switchView('fleet');
     await fetchState();
@@ -742,6 +893,7 @@ async function submitUpload() {
   fd.append('force_cooldown', document.getElementById('upForceCooldown').checked);
   fd.append('delete_old_posts', document.getElementById('upDelOld')?.checked || false);
   fd.append('appeal_after_upload', document.getElementById('upAutoAppeal')?.checked || false);
+  fd.append('threads', document.getElementById('upThreads')?.value || String(getGlobalThreads()));
 
   const btn = document.getElementById('btnUpload'); btn.disabled = true;
   try {
@@ -791,13 +943,488 @@ async function submitCampaign() {
   fd.append('randomize_tags', document.getElementById('upRandTags').checked);
   fd.append('delete_old_posts', document.getElementById('upDelOld').checked);
   fd.append('auto_appeal_2048', document.getElementById('upAutoAppeal').checked);
+  fd.append('defer_post_appeal_to_queue', document.getElementById('upDeferUnban')?.checked || false);
+  fd.append('appeal_queue_threads', document.getElementById('upAppealQueueThreads')?.value || '3');
   fd.append('pin_sticky_proxy', document.getElementById('upStickyProxy').checked);
 
   const btn = document.getElementById('btnRunCampaign'); btn.disabled = true;
   try {
     const r = await apiJson('/api/campaign/run', { method: 'POST', body: fd });
-    toast(`🚀 Кампания запущена в фоне на ${r.accounts} акк.! Следи за Live Console.`, 'success');
+    const defer = document.getElementById('upDeferUnban')?.checked;
+    toast(
+      `🚀 Кампания запущена на ${r.accounts} акк.!` +
+      (defer ? ' После залива аккаунты сразу пойдут в «⚡ Снятие огранов».' : ' Следи за Live Console.'),
+      'success'
+    );
   } catch (e) { toast(e.message, 'err'); } finally { btn.disabled = false; }
+}
+
+// ── 1-Click Copy Export & Standalone Unban Wave Queue ────────
+
+async function copyAccountsExport(scope = 'uploaded', fmt = 'lines', ids = []) {
+  try {
+    const qs = new URLSearchParams({ scope, fmt });
+    if (ids && ids.length) qs.set('ids', ids.join(','));
+    const r = await apiJson('/api/accounts/copy-export?' + qs.toString());
+    if (!r.text || !r.text.trim()) {
+      toast('По этому фильтру пока нет аккаунтов для копирования.', 'warn');
+      return;
+    }
+    const fmtNames = { lines: 'строк', usernames: '@логинов', urls: 'ссылок постов', summary: 'сводных строк' };
+    await copyTextToClipboard(r.text, `📋 Скопировано ${r.count} ${fmtNames[fmt] || 'записей'}!`);
+    if (scope === 'uploaded' || scope === 'clean') {
+      const ta = document.getElementById('uploadedCopyPreview');
+      if (ta) ta.value = r.text;
+    }
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function copySelectedAccounts(fmt = 'lines') {
+  const ids = Array.from(SELECTED_IDS);
+  if (!ids.length) return toast('Сначала выбери аккаунты галочками!', 'warn');
+  await copyAccountsExport('selected', fmt, ids);
+}
+
+async function copySingleAccountLine(aid) {
+  const a = (STATE.accounts || []).find(x => x.account_id === aid);
+  if (a && a.copy_line) {
+    await copyTextToClipboard(a.copy_line, `📋 Строка @${a.username || aid} скопирована!`);
+    return;
+  }
+  await copyAccountsExport('selected', 'lines', [aid]);
+}
+
+async function loadUploadedCopyPreview() {
+  const ta = document.getElementById('uploadedCopyPreview');
+  const badge = document.getElementById('uploadedCountBadge');
+  const mini = document.getElementById('uploadedAccountsMiniList');
+  if (!ta) return;
+  try {
+    const r = await apiJson('/api/accounts/copy-export?scope=uploaded&fmt=lines');
+    ta.value = r.text || '';
+    if (badge) badge.textContent = `${r.accounts_count || 0} акк.`;
+    if (mini) {
+      const items = r.items || [];
+      if (!items.length) {
+        mini.innerHTML = '<div style="font-size:11.5px;color:var(--muted);">Пока нет пролитых аккаунтов. После залива они появятся здесь автоматически.</div>';
+      } else {
+        mini.innerHTML = items.map(it => {
+          const fBadge = it.folder_key === 'clean'
+            ? '<span class="badge b-ok">clean</span>'
+            : (it.folder_key === 'queued_unban'
+              ? '<span class="badge b-cyan">в очереди 2048</span>'
+              : (it.folder_key ? `<span class="badge b-warn">${esc(it.folder_key)}</span>` : ''));
+          return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 8px;border-radius:8px;background:rgba(15,23,42,0.55);border:1px solid var(--border);font-size:11.5px;">
+            <div style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+              <strong>@${esc(it.username)}</strong>
+              <span class="mono" style="color:var(--muted);">· ${it.posts_count} пост. · ${Number(it.views || 0).toLocaleString()} views</span>
+              ${fBadge}
+            </div>
+            <button class="btn btn-sm btn-ghost" style="padding:2px 7px;" onclick="copySingleAccountLine('${esc(it.account_id)}')" title="Скопировать строку аккаунта">📋</button>
+          </div>`;
+        }).join('');
+      }
+    }
+  } catch (_) {}
+}
+
+function setUnbanThreads(n) {
+  const el = document.getElementById('unbanThreads');
+  if (el) el.value = String(n);
+}
+
+function renderUnbanPicker() {
+  const box = document.getElementById('unbanPickerList');
+  if (!box) return;
+  const authed = (STATE.accounts || []).filter(a => a.authenticated);
+  if (!authed.length) {
+    box.innerHTML = '<div style="font-size:12px;color:var(--muted);">Нет авторизованных аккаунтов с активной сессией.</div>';
+    return;
+  }
+  box.innerHTML = authed.map(a => {
+    const checked = UNBAN_TARGETS.has(a.account_id) ? 'checked' : '';
+    return `<label style="display:flex;align-items:center;justify-content:space-between;padding:7px 10px;border-radius:9px;background:rgba(8,11,19,0.7);border:1px solid var(--border);cursor:pointer;font-size:12px;">
+      <span style="display:flex;align-items:center;gap:8px;">
+        <input type="checkbox" class="chk" ${checked} onchange="toggleUnbanTarget('${esc(a.account_id)}')" />
+        <strong>@${esc(a.audit?.uniq_id || a.username)}</strong>
+        ${healthBadgeHtml(a)}
+      </span>
+      <span class="mono" style="font-size:11px;color:var(--muted);">постов: ${a.audit?.total_posts ?? a.uploads_count}</span>
+    </label>`;
+  }).join('');
+}
+
+function toggleUnbanTarget(aid) {
+  if (UNBAN_TARGETS.has(aid)) UNBAN_TARGETS.delete(aid);
+  else UNBAN_TARGETS.add(aid);
+}
+
+function toggleAllUnbanTargets() {
+  const authedIds = (STATE.accounts || []).filter(a => a.authenticated).map(a => a.account_id);
+  const all = authedIds.length > 0 && authedIds.every(id => UNBAN_TARGETS.has(id));
+  if (all) UNBAN_TARGETS.clear();
+  else authedIds.forEach(id => UNBAN_TARGETS.add(id));
+  renderUnbanPicker();
+}
+
+async function fetchUnbanQueue() {
+  try {
+    const snap = await apiJson('/api/unban-queue/status');
+    renderUnbanQueue(snap);
+  } catch (_) {}
+}
+
+function renderUnbanQueue(snap) {
+  if (!snap) return;
+  LAST_UNBAN_SNAPSHOT = snap;
+  renderActiveJobsStrip();
+  const c = snap.counts || {};
+  const running = Boolean(snap.running);
+  const activeCnt = (c.queued || 0) + (c.waiting || 0);
+
+  const pill = document.getElementById('navUnbanPill');
+  if (pill) {
+    pill.textContent = running ? `${activeCnt}⚡` : (c.done ? `${c.clean || 0}/${c.total || 0}` : '2048');
+  }
+
+  const badge = document.getElementById('unbanStatusBadge');
+  if (badge) {
+    badge.className = 'badge mono ' + (running ? 'b-warn' : (c.clean > 0 ? 'b-ok' : 'b-cyan'));
+    badge.textContent = running
+      ? `РАБОТАЕТ · ${snap.active_workers || 0} пот.`
+      : (c.total ? `ГОТОВО · ${c.clean || 0} clean` : 'ОЖИДАНИЕ');
+  }
+
+  const kpi = document.getElementById('unbanKpiStrip');
+  if (kpi) {
+    kpi.innerHTML = `
+      <span class="badge b-neutral mono">Всего: ${c.total || 0}</span>
+      <span class="badge b-cyan mono">В очереди: ${c.queued || 0}</span>
+      <span class="badge b-warn mono">Ждут волн: ${c.waiting || 0}</span>
+      <span class="badge b-ok mono">Clean: ${c.clean || 0}</span>
+      <span class="badge b-neutral mono">Апелляций: ${c.appeals_total || 0}</span>`;
+  }
+
+  const box = document.getElementById('unbanQueueTableBox');
+  if (!box) return;
+  const items = snap.items || [];
+  if (!items.length) {
+    box.innerHTML = 'Очередь пуста. Выбери режим сверху и нажми «▶ Запустить снятие огранов» — либо запусти массовый залив с опцией дожима в отдельных потоках.';
+    return;
+  }
+
+  const statusHtml = (it) => {
+    if (it.status === 'queued') return '<span class="badge b-neutral">В очереди</span>';
+    if (it.status === 'waiting') return '<span class="badge b-warn">⏳ Дожимает волны</span>';
+    if (it.status === 'done') {
+      if (it.folder_key === 'clean') return '<span class="badge b-ok">✅ CLEAN</span>';
+      if (it.folder_key === 'ogran_na_proverke') return '<span class="badge b-warn">⏳ НА ПРОВЕРКЕ</span>';
+      return '<span class="badge b-err">🚨 НЕ СНЯТ</span>';
+    }
+    if (it.status === 'stopped') return '<span class="badge b-neutral">⏹ Остановлен</span>';
+    return '<span class="badge b-err">❌ Ошибка</span>';
+  };
+
+  box.innerHTML = `<table class="data-tbl">
+    <thead>
+      <tr>
+        <th>Аккаунт</th>
+        <th>Статус</th>
+        <th>Апелляций</th>
+        <th>Прогресс / Тишина</th>
+        <th>Папка / Итог</th>
+        <th style="text-align:right;">Копия</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${items.map(it => {
+        const pct = it.quiet_sec > 0 ? Math.min(100, Math.round(((it.idle_sec || 0) / it.quiet_sec) * 100)) : 100;
+        const waitBar = it.status === 'waiting'
+          ? `<div class="mono" style="font-size:11px;">тишина ${it.idle_sec || 0}/${it.quiet_sec || 0}с · всего ${it.elapsed_sec || 0}с</div>
+             <div class="bar-track" style="height:5px;margin-top:4px;"><div class="bar-fill" style="width:${pct}%"></div></div>`
+          : `<span class="mono" style="font-size:11px;color:var(--muted);">${esc(it.updated_at || '—')}</span>`;
+        return `<tr>
+          <td><strong style="cursor:pointer;" onclick="openDrawer('${esc(it.account_id)}')">@${esc(it.username || it.account_id)}</strong></td>
+          <td>${statusHtml(it)}</td>
+          <td class="mono"><strong>${it.appeals_sent || 0}</strong>${it.active_remaining ? ` <span style="color:var(--err)">(акт:${it.active_remaining})</span>` : ''}${it.reviewing_count ? ` <span style="color:var(--warn)">(пров:${it.reviewing_count})</span>` : ''}</td>
+          <td style="min-width:155px;">${waitBar}</td>
+          <td style="font-size:11.5px;">${esc(it.folder_title || it.folder_key || '—')}</td>
+          <td style="text-align:right;">
+            <button class="btn btn-sm btn-ghost" onclick="copySingleAccountLine('${esc(it.account_id)}')" title="Скопировать строку аккаунта">📋</button>
+          </td>
+        </tr>`;
+      }).join('')}
+    </tbody>
+  </table>`;
+}
+
+async function startUnbanQueue(overridePayload = null) {
+  const scope = overridePayload?.scope || document.getElementById('unbanScope')?.value || 'uploaded';
+  let accountIds = overridePayload?.account_ids || [];
+  if (!accountIds.length && scope === 'selected') {
+    accountIds = UNBAN_TARGETS.size ? Array.from(UNBAN_TARGETS) : Array.from(SELECTED_IDS);
+    if (!accountIds.length) return toast('Выбери аккаунты галочками справа (или во флоте)!', 'warn');
+  }
+  const body = {
+    scope,
+    account_ids: accountIds,
+    threads: parseInt(document.getElementById('unbanThreads')?.value || '3', 10),
+    wait_settle: document.getElementById('unbanWaitSettle')?.checked ?? true,
+    quiet_seconds: parseFloat(document.getElementById('unbanQuietSec')?.value || '60'),
+    max_wait_seconds: parseFloat(document.getElementById('unbanMaxWaitSec')?.value || '240'),
+    only_account_ineligible: document.getElementById('unbanOnly2048')?.checked ?? true,
+    appeal_studio_posts: document.getElementById('unbanIncludeStudio')?.checked ?? false,
+    hide_rejected: document.getElementById('unbanHideRejected')?.checked ?? true,
+    sort_to_folders: document.getElementById('unbanSortFolders')?.checked ?? true,
+    clear_finished: overridePayload?.clear_finished ?? true,
+    ...(overridePayload || {}),
+  };
+  try {
+    const r = await apiPost('/api/unban-queue/start', body);
+    renderUnbanQueue(r.snapshot);
+    toast(`⚡ В очередь снятия огранов добавлено: ${(r.added || []).length} акк. (${body.threads} пот.)`, 'success');
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function stopUnbanQueue() {
+  try {
+    const r = await apiPost('/api/unban-queue/stop');
+    renderUnbanQueue(r.snapshot);
+    toast('⏹ Очередь снятия огранов останавливается...', 'warn');
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function clearUnbanQueueFinished() {
+  try {
+    const snap = await apiPost('/api/unban-queue/clear');
+    renderUnbanQueue(snap);
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function sendSelectedToUnbanQueue() {
+  const ids = Array.from(SELECTED_IDS);
+  if (!ids.length) return toast('Выбери аккаунты галочками!', 'warn');
+  switchView('unban');
+  await startUnbanQueue({ scope: 'selected', account_ids: ids, clear_finished: false });
+}
+
+async function sendUploadedToUnbanQueue() {
+  switchView('unban');
+  const sel = document.getElementById('unbanScope');
+  if (sel) sel.value = 'uploaded';
+  await startUnbanQueue({ scope: 'uploaded', account_ids: [], clear_finished: true });
+}
+
+// ── Pro Shadowban & Moderation Checker ───────────────────────
+
+async function fillShadowUsernames(mode) {
+  const ta = document.getElementById('shadowUsernamesInput');
+  if (!ta) return;
+  if (mode === 'uploaded') {
+    try {
+      const r = await apiJson('/api/accounts/copy-export?scope=uploaded&fmt=usernames');
+      if (!r.text || !r.text.trim()) return toast('Пока нет пролитых аккаунтов в базе.', 'warn');
+      ta.value = r.text;
+      toast(`Подставлено пролитых аккаунтов: ${r.count}`, 'success');
+    } catch (e) { toast(e.message, 'err'); }
+    return;
+  }
+  if (mode === 'selected') {
+    const ids = Array.from(SELECTED_IDS);
+    if (!ids.length) return toast('Во флоте не выбрано ни одного аккаунта.', 'warn');
+    const lines = ids.map(id => {
+      const a = (STATE.accounts || []).find(x => x.account_id === id);
+      return '@' + (a?.audit?.uniq_id || a?.username || id);
+    });
+    ta.value = lines.join('\n');
+    toast(`Подставлено выбранных: ${lines.length}`, 'success');
+    return;
+  }
+  const allLines = (STATE.accounts || []).map(a => '@' + (a.audit?.uniq_id || a.username || a.account_id));
+  if (!allLines.length) return toast('База аккаунтов пуста.', 'warn');
+  ta.value = allLines.join('\n');
+  toast(`Подставлен весь флот: ${allLines.length}`, 'success');
+}
+
+async function loadLastShadowCheck() {
+  try {
+    const d = await apiJson('/api/shadow-checker/last');
+    if (d && (d.results || []).length) {
+      LAST_SHADOW_CHECK = d;
+      renderProShadowResults(d);
+    }
+  } catch (_) {}
+}
+
+function setShadowFilter(f, btn) {
+  SHADOW_FILTER = f;
+  document.querySelectorAll('#shadowFilterChips .chip').forEach(c => c.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  if (LAST_SHADOW_CHECK) renderProShadowResults(LAST_SHADOW_CHECK);
+}
+
+async function runProShadowChecker() {
+  const btn = document.getElementById('btnRunShadowChecker');
+  const txt = (document.getElementById('shadowUsernamesInput')?.value || '').trim();
+  const th = parseInt(document.getElementById('shadowThreads')?.value || String(getGlobalThreads()), 10) || 5;
+  btn.disabled = true;
+  toast(`👁 Запуск чекера тени в ${th} пот....`, 'info');
+  try {
+    const data = await apiPost('/api/shadow-checker/run', {
+      usernames_text: txt,
+      scope: txt ? 'manual' : 'uploaded',
+      threads: th,
+      deep_audit: document.getElementById('shadowDeepAudit')?.checked ?? true,
+      max_posts: parseInt(document.getElementById('shadowMaxPosts')?.value || '12', 10) || 12,
+      zero_view_threshold_minutes: parseFloat(document.getElementById('shadowZeroMin')?.value || '20') || 20,
+    });
+    LAST_SHADOW_CHECK = data;
+    renderProShadowResults(data);
+    const c = data.counts || {};
+    toast(`👁 Чек завершён: чисто=${c.clean || 0}, подозр=${c.partial_shadow || 0}, в тени=${c.shadowbanned || 0}`, 'success');
+    await fetchState();
+  } catch (e) {
+    toast(e.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function renderProShadowResults(data) {
+  if (!data) return;
+  const c = data.counts || {};
+  const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  setTxt('shKpiClean', c.clean || 0);
+  setTxt('shKpiPartial', c.partial_shadow || 0);
+  setTxt('shKpiShadow', c.shadowbanned || 0);
+  setTxt('shKpiViews', (c.total_views || 0).toLocaleString('ru-RU'));
+  setTxt('shadowSummaryMeta', `Проверено: ${c.total || 0} акк. · ${c.total_posts || 0} постов · ${data.threads || 1} пот.`);
+  const pill = document.getElementById('navShadowPill');
+  if (pill && (c.total || 0) > 0) pill.textContent = `${c.clean || 0}/${c.total || 0}`;
+
+  const box = document.getElementById('shadowCheckerResults');
+  if (!box) return;
+  const allRes = data.results || [];
+  const filtered = allRes.filter(r => SHADOW_FILTER === 'all' || r.verdict === SHADOW_FILTER);
+  if (!filtered.length) {
+    box.innerHTML = '<div style="color:var(--muted);font-size:12px;">Нет аккаунтов по выбранному фильтру.</div>';
+    return;
+  }
+
+  const vBadge = (r) => {
+    if (r.verdict === 'clean') return `<span class="badge b-ok">${esc(r.verdict_label)}</span>`;
+    if (r.verdict === 'partial_shadow') return `<span class="badge b-warn">${esc(r.verdict_label)}</span>`;
+    if (r.verdict === 'shadowbanned') return `<span class="badge b-err">${esc(r.verdict_label)}</span>`;
+    return `<span class="badge b-neutral">${esc(r.verdict_label)}</span>`;
+  };
+
+  box.innerHTML = filtered.map(r => {
+    const idx = allRes.indexOf(r);
+    const posts = r.posts || [];
+    const scoreColor = r.health_score >= 85 ? 'var(--ok)' : (r.health_score >= 55 ? 'var(--warn)' : 'var(--err)');
+    const reasonsHtml = (r.reasons || []).length
+      ? `<div style="margin-top:6px;font-size:11.5px;color:var(--warn);">⚠️ ${r.reasons.map(esc).join(' · ')}</div>`
+      : '';
+
+    const postsHtml = posts.length
+      ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:8px;margin-top:10px;">
+          ${posts.map((p, pi) => {
+            const shBadge = p.shadow_code === 'no'
+              ? '<span class="badge b-ok">🌟 Тень: Нет</span>'
+              : (p.shadow_code === 'suspect'
+                ? '<span class="badge b-warn">🌟 Тень: Подозрение</span>'
+                : '<span class="badge b-err">🌟 Тень: Да</span>');
+            const modBadge = p.moderation_code === 'passed'
+              ? '<span class="badge b-ok">👮 Модерация: Пройдена</span>'
+              : `<span class="badge b-warn">👮 ${esc(p.moderation_label)}</span>`;
+            const f = p.flags || {};
+            const flagTags = [];
+            if (f.is_nff_or_nr) flagTags.push('is_nff_or_nr');
+            if (f.risk_sink) flagTags.push('risk_sink');
+            if (f.in_reviewing) flagTags.push('in_reviewing');
+            if (f.self_see) flagTags.push('self_see');
+            if (f.is_prohibited) flagTags.push('is_prohibited');
+            if (!p.is_public_visible) flagTags.push('hidden_public');
+            return `<div style="background:rgba(8,11,19,0.75);border:1px solid var(--border);border-radius:10px;padding:9px 11px;font-size:11.5px;">
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:5px;">
+                <a href="${esc(p.url)}" target="_blank" class="mono" style="color:#93c5fd;text-decoration:none;font-weight:600;">Пост #${pi + 1} (${esc(p.aweme_id.slice(-6))}) ↗</a>
+                <span class="mono" style="color:var(--muted);">${esc(p.region_flag)} ${esc(p.region || '?')} · ${esc(p.created_str)}</span>
+              </div>
+              <div class="mono" style="margin-bottom:6px;color:var(--text);">
+                👁 <strong>${p.views}</strong> &nbsp;❤️ ${p.likes} &nbsp;💬 ${p.comments} &nbsp;📣 ${p.shares} &nbsp;💾 ${p.saves}
+              </div>
+              <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:5px;">${shBadge}${modBadge}</div>
+              ${flagTags.length ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px;">${flagTags.map(t => `<span class="badge b-err mono" style="font-size:10px;">${esc(t)}</span>`).join('')}</div>` : ''}
+              ${(p.reasons || []).length ? `<div style="font-size:11px;color:#fda4af;">${p.reasons.map(esc).join(' · ')}</div>` : ''}
+              ${(p.hashtags || []).length ? `<div style="font-size:10.5px;color:#818cf8;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(p.hashtags.join(' '))}</div>` : ''}
+            </div>`;
+          }).join('')}
+        </div>`
+      : `<div style="margin-top:8px;font-size:12px;color:var(--muted);">💊 На аккаунте нет публичных постов (или ещё не завершилась публикация / скрыты).</div>`;
+
+    return `<div style="background:rgba(15,20,32,0.88);border:1px solid var(--border-strong);border-radius:13px;padding:13px 15px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+        <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;">
+          <strong style="font-size:15px;">@${esc(r.username)}</strong>
+          ${vBadge(r)}
+          <span class="mono" style="font-weight:700;color:${scoreColor};">Score ${r.health_score}/100</span>
+          <span class="badge b-neutral mono">Постов: ${r.public_posts_count}/${r.total_posts}</span>
+          <span class="badge b-cyan mono">👁 ${(r.total_views || 0).toLocaleString('ru-RU')}</span>
+          ${r.active_2048 > 0 ? `<span class="badge b-err">2048: ${r.active_2048}</span>` : ''}
+          ${(r.regions || []).length ? `<span class="badge b-neutral mono">${esc(r.regions.join(','))}</span>` : ''}
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          <button class="btn btn-sm btn-emerald" onclick="copyShadowSingleLine(${idx})">📋 Строка</button>
+          <button class="btn btn-sm" onclick="copyShadowSingleTg(${idx})">📨 TG-отчёт</button>
+          ${r.owned ? `<button class="btn btn-sm btn-ghost" onclick="openDrawer('${esc(r.account_id)}')">Открыть ↗</button>` : ''}
+        </div>
+      </div>
+      ${reasonsHtml}
+      ${postsHtml}
+    </div>`;
+  }).join('');
+}
+
+async function copyShadowSingleLine(idx) {
+  const r = LAST_SHADOW_CHECK?.results?.[idx];
+  if (!r) return;
+  await copyTextToClipboard(r.copy_line || '@' + r.username, `📋 Скопировано @${r.username}`);
+}
+
+async function copyShadowSingleTg(idx) {
+  const r = LAST_SHADOW_CHECK?.results?.[idx];
+  if (!r) return;
+  await copyTextToClipboard(r.telegram_text || '', `📨 Telegram-отчёт @${r.username} скопирован!`);
+}
+
+async function copyShadowResults(group = 'clean', fmt = 'lines') {
+  const results = LAST_SHADOW_CHECK?.results || [];
+  if (!results.length) return toast('Сначала запусти чекер тени!', 'warn');
+  const filtered = results.filter(r => {
+    if (group === 'clean') return r.verdict === 'clean';
+    if (group === 'shadow') return r.verdict === 'shadowbanned' || r.verdict === 'partial_shadow' || r.verdict === 'no_public_posts';
+    return true;
+  });
+  if (!filtered.length) return toast('В этой группе 0 аккаунтов.', 'warn');
+  let text = '';
+  if (fmt === 'telegram') {
+    text = filtered.map(r => r.telegram_text).join('\n\n──────────────────\n\n');
+  } else if (fmt === 'usernames') {
+    text = filtered.map(r => '@' + r.username).join('\n');
+  } else {
+    text = filtered.map(r => r.copy_line || '@' + r.username).join('\n');
+  }
+  await copyTextToClipboard(text, `📋 Скопировано (${filtered.length} акк.)!`);
+}
+
+async function sendShadowFlaggedToUnban() {
+  const results = LAST_SHADOW_CHECK?.results || [];
+  const ids = results
+    .filter(r => r.owned && (r.verdict === 'shadowbanned' || r.verdict === 'partial_shadow' || r.active_2048 > 0))
+    .map(r => r.account_id);
+  if (!ids.length) return toast('Среди твоих аккаунтов не найдено проблемных для снятия огранов!', 'info');
+  switchView('unban');
+  await startUnbanQueue({ scope: 'selected', account_ids: ids, clear_finished: false });
 }
 
 async function loadSortedFolders() {
@@ -813,8 +1440,9 @@ async function loadSortedFolders() {
           <strong class="mono" style="font-size:15px;">${f.count}</strong>
         </div>
         <div style="display:flex;gap:6px;">
-          <a class="btn btn-sm" href="/api/folders/${encodeURIComponent(f.key)}/export?fmt=txt" style="text-decoration:none;flex:1;text-align:center;">⬇ TXT</a>
-          <a class="btn btn-sm" href="/api/folders/${encodeURIComponent(f.key)}/export?fmt=zip" style="text-decoration:none;flex:1;text-align:center;">📦 ZIP</a>
+          <button class="btn btn-sm btn-emerald" style="flex:1;" onclick="copyAccountsExport('${esc(f.key)}', 'lines')" title="Скопировать строки из этой папки в буфер обмена">📋 Копировать</button>
+          <a class="btn btn-sm" href="/api/folders/${encodeURIComponent(f.key)}/export?fmt=txt" style="text-decoration:none;text-align:center;">⬇ TXT</a>
+          <a class="btn btn-sm" href="/api/folders/${encodeURIComponent(f.key)}/export?fmt=zip" style="text-decoration:none;text-align:center;">📦 ZIP</a>
         </div>
       </div>`).join('');
   } catch (_) {}
@@ -976,7 +1604,7 @@ async function submitCommentBoost() {
       lead_comment_text: document.getElementById('cmtLeadText').value || '',
       reply_templates: document.getElementById('cmtReplies').value || '',
       reply_prob_pct: 40,
-      threads: 4,
+      threads: parseInt(document.getElementById('cmtThreads')?.value || String(getGlobalThreads()), 10) || 5,
     });
     toast(`💬 Коммент ${r.cid} забущен: ${r.likes_ok} лайков, ${r.replies_ok} ответов!`, 'success');
   } catch (e) { toast(e.message, 'err'); } finally { btn.disabled = false; }
@@ -994,7 +1622,7 @@ async function submitEngagementBoost() {
       do_collect: document.getElementById('boostCollect').checked,
       do_repost: document.getElementById('boostRepost').checked,
       comments_text: document.getElementById('boostComments').value || '',
-      threads: 4,
+      threads: parseInt(document.getElementById('boostThreads')?.value || String(getGlobalThreads()), 10) || 5,
     });
     toast(`🔥 Буст выполнен: ${r.success}/${r.total}`, 'success');
   } catch (e) { toast(e.message, 'err'); } finally { btn.disabled = false; }
@@ -1020,7 +1648,7 @@ async function submitBulkBranding() {
       bio_url: document.getElementById('brBioUrl').value || '',
       new_password: document.getElementById('brNewPass').value || '',
       enable_totp: document.getElementById('brEnableTotp').checked,
-      threads: 3,
+      threads: parseInt(document.getElementById('brThreads')?.value || String(getGlobalThreads()), 10) || 5,
     });
     toast(`🎨 Оформлено профилей: ${r.success}/${r.total}`, 'success');
     await fetchState();
@@ -1177,9 +1805,10 @@ function renderAnalytics() {
 
 async function runShadowCheck() {
   const btn = document.getElementById('btnCheckShadows'); btn.disabled = true;
+  const th = getGlobalThreads();
   try {
-    await apiPost('/api/shadows/check');
-    toast('Радар теней завершён', 'success');
+    await apiPost(`/api/shadows/check?threads=${th}`);
+    toast(`Радар теней завершён (${th} пот.)`, 'success');
     await fetchState();
   } catch (e) { toast(e.message, 'err'); } finally { btn.disabled = false; }
 }
@@ -1246,6 +1875,10 @@ function closeCmdK() { document.getElementById('cmdkBackdrop').classList.add('hi
 function renderCmdK() {
   const q = (document.getElementById('cmdkInput').value || '').trim().toLowerCase();
   const actions = [
+    { label: '📋 Копировать все пролитые аккаунты (строки)', hint: 'Clipboard', run: () => copyAccountsExport('uploaded', 'lines') },
+    { label: '📋 Копировать только чистые аккаунты (clean)', hint: 'Clipboard', run: () => copyAccountsExport('clean', 'lines') },
+    { label: '👁 Открыть Чекер Тени (is_nff_or_nr / risk_sink / 2048)', hint: 'View', run: () => switchView('shadow') },
+    { label: '⚡ Открыть очередь снятия огранов 2048 (дожим волн)', hint: 'View', run: () => switchView('unban') },
     { label: '↻ Запустить HTTP-аудит всех аккаунтов', hint: '0$ Kintaro', run: () => auditAll() },
     { label: '⚡ Снять все ограны на всех аккаунтах', hint: '3-Channel', run: () => appealAll() },
     { label: '🛡️ Переключить фонового сторожа Watchdog', hint: '95–165s', run: () => toggleWatchdog() },
@@ -1302,6 +1935,7 @@ function bindDropzone(elId, onFiles) {
 }
 
 (async function boot() {
+  setGlobalThreads(GLOBAL_THREADS, true);
   bindDropzone('mediaDropzone', files => handleMediaFiles(files));
   bindDropzone('txtDropzone', files => loadTxtFile({ target: { files } }));
   await fetchState();
@@ -1325,7 +1959,15 @@ function bindDropzone(elId, onFiles) {
           box.scrollTop = box.scrollHeight;
         }
       }
-      if (item.kind === 'audit_updated' || item.kind === 'watchdog' || item.kind === 'jobs_updated') fetchState();
+      if (item.kind === 'unban_queue') {
+        fetchUnbanQueue();
+      } else if (item.kind === 'audit_updated' || item.kind === 'watchdog' || item.kind === 'jobs_updated') {
+        fetchState();
+        if (item.kind === 'audit_updated') {
+          loadSortedFolders();
+          if (ACTIVE_VIEW === 'upload') loadUploadedCopyPreview();
+        }
+      }
     } catch (_) {}
   };
 })();

@@ -1036,6 +1036,7 @@ class AutomationPipeline:
         campaign: CampaignConfig,
         *,
         progress_cb: Callable[[str, str, dict[str, Any]], None] | None = None,
+        on_account_uploaded: Callable[[AccountRecord, CampaignAccountResult], None] | None = None,
     ) -> list[CampaignAccountResult]:
         """
         Full N-thread (default 5-thread) anti-shadowban campaign workflow:
@@ -1321,8 +1322,22 @@ class AutomationPipeline:
                                     )
 
                     # 7) Stage 3: Post-upload 2048 wave settle + 4-folder sorting
+                    #    OR immediate handoff to dedicated trailing-thread UnbanWaveQueueManager
                     final_audit = None
-                    if campaign.auto_appeal_2048 and campaign.appeal_post_upload:
+                    deferred_to_queue = (
+                        campaign.auto_appeal_2048
+                        and campaign.appeal_post_upload
+                        and campaign.defer_post_appeal_to_queue
+                        and on_account_uploaded is not None
+                    )
+                    if deferred_to_queue:
+                        res.folder_key = "queued_unban"
+                        res.appeal_verdict = "Передан в очередь дожима 2048"
+                        _emit(
+                            acc.account_id,
+                            "🔄 Залив готов — передаю аккаунт в отдельные потоки дожима волн 2048 (поток залива освобождается сразу)...",
+                        )
+                    elif campaign.auto_appeal_2048 and campaign.appeal_post_upload:
                         if campaign.appeal_post_wait_sec > 0 and res.posts_published > 0:
                             await self._sleep(campaign.appeal_post_wait_sec)
                         _emit(
@@ -1344,11 +1359,12 @@ class AutomationPipeline:
                         except Exception as p_exc:
                             _emit(acc.account_id, f"⚠️ Пост-залив Auto-Appeal ошибка: {p_exc}")
 
-                    folder_key, folder_title = classify_appeal_folder(final_audit, had_error=False)
-                    res.folder_key = folder_key
-                    res.appeal_verdict = folder_title
-                    if campaign.sort_to_folders:
-                        sort_account_into_folder(state_dir, folder_key, acc)
+                    if not deferred_to_queue:
+                        folder_key, folder_title = classify_appeal_folder(final_audit, had_error=False)
+                        res.folder_key = folder_key
+                        res.appeal_verdict = folder_title
+                        if campaign.sort_to_folders:
+                            sort_account_into_folder(state_dir, folder_key, acc)
 
                     # Quick live views snapshot
                     try:
@@ -1366,6 +1382,11 @@ class AutomationPipeline:
                         else ("partial" if res.posts_published > 0 else "upload_failed")
                     )
                     res.elapsed_sec = round(time.monotonic() - t0, 1)
+                    if deferred_to_queue and on_account_uploaded is not None:
+                        try:
+                            on_account_uploaded(acc, res)
+                        except Exception as cb_exc:
+                            _emit(acc.account_id, f"⚠️ Не удалось поставить в очередь дожима 2048: {cb_exc}")
                     _emit(
                         acc.account_id,
                         f"🏁 Кампания завершена за {res.elapsed_sec}с: постов={res.posts_published}/{campaign.copies_count}, "

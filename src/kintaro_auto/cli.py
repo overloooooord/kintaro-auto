@@ -1197,12 +1197,12 @@ def run_web_dashboard(
     port: Annotated[int, typer.Option("--port", "-p", help="Порт веб-панели")] = 8080,
     config: Annotated[Path | None, typer.Option("--config", "-c")] = None,
 ) -> None:
-    """Запустить веб-панель управления KINTARO FARM OS v4.0 (Campaign + Unban + Spy + Outlook Hub)."""
+    """Запустить веб-панель управления KINTARO FARM OS v5.0 (Campaign + Unban Queue + Spy + Outlook Hub)."""
     import uvicorn
     from kintaro_auto.web import create_web_app
 
     console.print(
-        f"[bold green]🚀 Веб-панель KINTARO FARM OS v4.0 запущена:[/bold green] "
+        f"[bold green]🚀 Веб-панель KINTARO FARM OS v5.0 запущена:[/bold green] "
         f"[bold cyan]http://{host}:{port}[/bold cyan]"
     )
     uvicorn.run(create_web_app(config), host=host, port=port, log_level="warning")

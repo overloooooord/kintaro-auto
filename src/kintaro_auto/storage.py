@@ -159,6 +159,7 @@ def parse_shop_account_line(line: str, proxy: str, region: str) -> AccountRecord
             password=password,
             email=email,
             totp_token=totp,
+            raw_line=cleaned,
         )
 
     # Colon-separated Outlook-Hub / standard colon format
@@ -211,6 +212,7 @@ def parse_shop_account_line(line: str, proxy: str, region: str) -> AccountRecord
             recovery_password=rec_pw,
             mail_totp=hotmail_2fa,
             use_outlook_hub=True,
+            raw_line=cleaned,
         )
 
     if len(raw_parts) >= 2:
@@ -226,11 +228,31 @@ def parse_shop_account_line(line: str, proxy: str, region: str) -> AccountRecord
             username=username,
             password=password,
             totp_token=totp,
+            raw_line=cleaned,
         )
 
     raise ValueError(
         f"Не удалось разобрать строку аккаунта {line!r}. Ожидается `username|password|email|totp` или `login:pass:outlook:mail_pass:rec_mail:rec_pass:2fa`."
     )
+
+
+def format_account_copy_line(account: AccountRecord) -> str:
+    """Returns a copy-ready credential line for clipboard export (preserving raw shop/Outlook format when known)."""
+    if account.raw_line and account.raw_line.strip():
+        return account.raw_line.strip()
+    uname = (account.username or account.account_id or "").strip()
+    if account.use_outlook_hub or account.mail_password:
+        parts = [uname, account.password or "", account.email or "", account.mail_password or ""]
+        if account.recovery_email:
+            parts.extend([account.recovery_email, account.recovery_password or ""])
+        if account.mail_totp:
+            parts.append(account.mail_totp)
+        return ":".join(parts)
+    if account.password and (account.totp_token or account.email):
+        return f"{uname}|{account.password}|{account.email or ''}|{account.totp_token or ''}"
+    if account.password:
+        return f"{uname}:{account.password}"
+    return f"{uname}:{account.email}" if account.email else uname
 
 
 def load_queue(path: Path) -> list[UploadTask]:

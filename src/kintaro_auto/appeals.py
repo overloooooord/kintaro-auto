@@ -1533,11 +1533,14 @@ async def wait_and_appeal_settle(
     quiet_seconds: float = 60.0,
     max_wait_seconds: float = 240.0,
     poll_interval_seconds: float = 8.0,
+    progress_cb: Any = None,
+    stop_check: Any = None,
 ) -> AccountAppealSummary:
     """
     Polls Account Updates (`group=47/661`) repeatedly after an upload wave so trickle restrictions
     (0, 2, or up to 16+ notices arriving asynchronously over 1–3 minutes) are ALL caught and appealed.
-    Stops once `quiet_seconds` pass with zero newly arrived appealable `punish_id`s or `max_wait_seconds` elapses.
+    Stops once `quiet_seconds` pass with zero newly arrived appealable `punish_id`s, `max_wait_seconds` elapses,
+    or `stop_check()` returns True.
     """
     start_ts = time.monotonic()
     last_activity_ts = start_ts
@@ -1550,6 +1553,8 @@ async def wait_and_appeal_settle(
     restored_confirm_checks = 0
 
     while True:
+        if stop_check and stop_check():
+            break
         s = await remove_account_restrictions(
             account,
             appeal_text=appeal_text,
@@ -1589,6 +1594,21 @@ async def wait_and_appeal_settle(
         elapsed = now_ts - start_ts
         idle = now_ts - last_activity_ts
 
+        if progress_cb:
+            try:
+                progress_cb(
+                    {
+                        "appeals_sent": total_notice_verified + total_post_verified,
+                        "active_remaining": active_appealable,
+                        "reviewing_count": reviewing_cnt,
+                        "idle_sec": int(idle),
+                        "quiet_sec": int(quiet_seconds),
+                        "elapsed_sec": int(elapsed),
+                    }
+                )
+            except Exception:
+                pass
+
         # Smart fast-exit when 2048 waves have all been approved and 2 clean checks confirm no new wave
         if (
             only_account_ineligible
@@ -1614,7 +1634,16 @@ async def wait_and_appeal_settle(
             idle,
             quiet_seconds,
         )
-        await asyncio.sleep(poll_interval_seconds)
+        # Interruptible sleep so Stop button reacts within 1s
+        slept = 0.0
+        while slept < poll_interval_seconds:
+            if stop_check and stop_check():
+                break
+            step = min(1.0, poll_interval_seconds - slept)
+            await asyncio.sleep(step)
+            slept += step
+        if stop_check and stop_check():
+            break
 
     return AccountAppealSummary(
         account_id=account.account_id,
@@ -1657,21 +1686,28 @@ def sort_account_into_folder(
     note: str = "",
 ) -> Path:
     """Places account entry + session JSON copy into `state/sorted_accounts/<folder_key>/` and deduplicates across folders."""
+    from kintaro_auto.storage import format_account_copy_line
+
     spec = SORTED_FOLDER_SPECS.get(folder_key, SORTED_FOLDER_SPECS["errors"])
     root = Path(state_dir) / "sorted_accounts"
     key_id = (account.username or account.account_id).strip()
-    line_text = (account.raw_line or f"{key_id}:{account.email or account.region}").strip()
+    line_text = format_account_copy_line(account).strip() or f"{key_id}:{account.email or account.region}"
     if note and folder_key == "errors":
         line_text = f"{line_text} # {note}"
 
     # Remove stale entry from other folders first
+    key_low = key_id.lower()
     for fkey, fspec in SORTED_FOLDER_SPECS.items():
         fdir = root / fkey
         txt_file = fdir / fspec["filename"]
         if txt_file.exists():
             lines = [
-                ln for ln in txt_file.read_text(encoding="utf-8").splitlines()
-                if ln.strip() and not ln.strip().lower().startswith(f"{key_id.lower()}:") and ln.strip().lower() != key_id.lower()
+                ln
+                for ln in txt_file.read_text(encoding="utf-8").splitlines()
+                if ln.strip()
+                and not ln.strip().lower().startswith(f"{key_low}:")
+                and not ln.strip().lower().startswith(f"{key_low}|")
+                and ln.strip().lower() != key_low
             ]
             txt_file.write_text(("\n".join(lines) + "\n") if lines else "", encoding="utf-8")
         sess_copy = fdir / "sessions" / f"{account.account_id}.json"

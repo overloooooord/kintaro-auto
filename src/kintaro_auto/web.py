@@ -50,6 +50,7 @@ from kintaro_auto.presets import (
     save_campaign_preset,
     save_media_bytes,
 )
+from kintaro_auto.shadow_checker import run_batch_shadowban_check
 from kintaro_auto.spy import (
     download_creative_to_media,
     fetch_post_comments_structured,
@@ -57,10 +58,17 @@ from kintaro_auto.spy import (
     run_top_comment_boost,
     spy_competitor_profile,
 )
-from kintaro_auto.storage import StateStore, normalize_proxy_url, parse_shop_account_line
+from kintaro_auto.storage import (
+    StateStore,
+    format_account_copy_line,
+    normalize_proxy_url,
+    parse_shop_account_line,
+)
 from kintaro_auto.studio_ops import (
     AutoPilotScheduler,
     ScheduledJob,
+    UnbanWaveQueueManager,
+    build_accounts_copy_payload,
     export_all_sessions_jsonl,
     export_all_sessions_zip,
     export_analytics_csv,
@@ -204,17 +212,38 @@ class DashboardHub:
         self.cfg = load_config(self.config_path)
         self.store = StateStore(self.cfg.state_dir)
 
-    def start_job(self, label: str, total: int = 1) -> str:
+    def start_job(self, label: str, total: int = 1, threads: int = 1) -> str:
         jid = uuid.uuid4().hex[:8]
         self.active_jobs[jid] = {
             "id": jid,
             "label": label,
             "done": 0,
             "total": max(1, total),
+            "threads": max(1, min(15, int(threads))),
+            "active_workers": 0,
+            "active_accounts": [],
             "started_at": datetime.now().strftime("%H:%M:%S"),
         }
         self.push_event(f"▶ {label}", "info", kind="jobs_updated")
         return jid
+
+    def worker_enter(self, jid: str, account_id: str) -> None:
+        job = self.active_jobs.get(jid)
+        if not job:
+            return
+        if account_id not in job["active_accounts"]:
+            job["active_accounts"].append(account_id)
+        job["active_workers"] = len(job["active_accounts"])
+        self.push_event("", "info", kind="jobs_updated", silent_log=True)
+
+    def worker_exit(self, jid: str, account_id: str) -> None:
+        job = self.active_jobs.get(jid)
+        if not job:
+            return
+        if account_id in job["active_accounts"]:
+            job["active_accounts"].remove(account_id)
+        job["active_workers"] = len(job["active_accounts"])
+        self.push_event("", "info", kind="jobs_updated", silent_log=True)
 
     def step_job(self, jid: str, delta: int = 1) -> None:
         if jid in self.active_jobs:
@@ -276,6 +305,7 @@ class DashboardHub:
             "last_warmup_at": acc.last_warmup_at,
             "uploads_count": len(acc.upload_history),
             "upload_history": [r.model_dump(mode="json") for r in acc.upload_history[-10:]],
+            "copy_line": format_account_copy_line(acc),
             "audit": cached,
         }
 
@@ -364,6 +394,7 @@ class BatchImportRequest(BaseModel):
     auto_clean_posts: bool = False
     auto_appeal: bool = True
     hide_rejected: bool = True
+    threads: int = 5
 
 
 class FolderImportRequest(BaseModel):
@@ -380,6 +411,7 @@ class AppealRequest(BaseModel):
     quiet_seconds: float = 60.0
     max_wait_seconds: float = 240.0
     hide_rejected: bool = True
+    threads: int = 5
 
 
 class PostVisibilityRequest(BaseModel):
@@ -402,12 +434,13 @@ class ProfileUpdateRequest(BaseModel):
 
 class BulkActionRequest(BaseModel):
     account_ids: list[str]
-    action: str  # auth | audit | appeal | clean_posts | restart | warmup | sync_geo | set_proxy | delete
+    action: str  # auth | audit | appeal | unban_queue | clean_posts | restart | warmup | sync_geo | set_proxy | delete
     region: str = "US"
     proxy: str = ""
     appeal_studio_posts: bool = False
     hide_rejected: bool = True
     reason: str = "Our content is original, authentic, and strictly follows all TikTok Community Guidelines."
+    threads: int = 5
 
 
 class ProxyTestRequest(BaseModel):
@@ -494,6 +527,32 @@ class AutoPilotAddRequest(BaseModel):
     note: str = ""
 
 
+class UnbanQueueStartRequest(BaseModel):
+    scope: str = "uploaded"  # "uploaded" | "selected" | "restricted" | "all"
+    account_ids: list[str] = []
+    threads: int = 3
+    wait_settle: bool = True
+    quiet_seconds: float = 60.0
+    max_wait_seconds: float = 240.0
+    poll_interval_seconds: float = 6.0
+    only_account_ineligible: bool = True
+    appeal_studio_posts: bool = False
+    hide_rejected: bool = True
+    sort_to_folders: bool = True
+    appeal_text: str = "Our content is original, authentic, and strictly follows all TikTok Community Guidelines."
+    clear_finished: bool = True
+
+
+class ShadowCheckerRequest(BaseModel):
+    usernames_text: str = ""
+    scope: str = "manual"  # "manual" | "uploaded" | "selected" | "all"
+    account_ids: list[str] = []
+    threads: int = 5
+    deep_audit: bool = True
+    max_posts: int = 12
+    zero_view_threshold_minutes: float = 20.0
+
+
 class ConfigUpdateRequest(BaseModel):
     api_key: str | None = None
     max_parallel_accounts: int | None = None
@@ -517,9 +576,22 @@ def _parse_proxy_pool(proxies_text: str, fallback_proxy: str) -> list[str]:
 
 def create_web_app(config_path: Path | None = None) -> FastAPI:
     hub = DashboardHub(config_path)
-    app = FastAPI(title="Kintaro Auto · TikTok Farm OS", version="3.0.0")
+    app = FastAPI(title="Kintaro Auto · TikTok Farm OS", version="5.0.0")
     if STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+    def _on_unban_audit(aid: str, audit_dict: dict[str, Any]) -> None:
+        hub.audit_cache[aid] = audit_dict
+        hub._save_audit_cache()
+
+    unban_queue = UnbanWaveQueueManager(
+        hub.store,
+        Path(hub.cfg.state_dir),
+        on_event=lambda text, level, kind: hub.push_event(
+            text, level, kind=kind, silent_log=not bool(text)
+        ),
+        on_audit=_on_unban_audit,
+    )
 
     class _HubLogHandler(logging.Handler):
         def emit(self, record: logging.LogRecord) -> None:
@@ -560,6 +632,7 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
                 if hub.watchdog_next_run_ts
                 else None,
             },
+            "unban_queue": unban_queue.snapshot(),
             "logs": hub.logs[-120:],
         }
 
@@ -583,25 +656,28 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
         return StreamingResponse(_gen(), media_type="text/event-stream")
 
     @app.post("/api/audit-all")
-    async def audit_all() -> dict[str, Any]:
+    async def audit_all(threads: int = 5) -> dict[str, Any]:
         targets = [a for a in hub.store.list_accounts() if a.authenticated and a.device]
-        jid = hub.start_job(f"HTTP-аудит ({len(targets)} акк.)", total=max(1, len(targets)))
-        sem = asyncio.Semaphore(3)
+        eff_threads = max(1, min(15, int(threads)))
+        jid = hub.start_job(f"HTTP-аудит ({len(targets)} акк. · {eff_threads} пот.)", total=max(1, len(targets)), threads=eff_threads)
+        sem = asyncio.Semaphore(eff_threads)
 
         async def _one(aid: str) -> None:
             async with sem:
+                hub.worker_enter(jid, aid)
                 try:
                     await hub.run_audit_one(aid)
                 except Exception as exc:
                     hub.push_event(f"[{aid}] Ошибка аудита: {exc}", "error")
                 finally:
+                    hub.worker_exit(jid, aid)
                     hub.step_job(jid)
 
         try:
             await asyncio.gather(*(_one(a.account_id) for a in targets))
         finally:
             hub.end_job(jid)
-        return {"ok": True, "audited": len(targets)}
+        return {"ok": True, "audited": len(targets), "threads": eff_threads}
 
     @app.post("/api/accounts/{account_id}/audit")
     async def audit_one(account_id: str) -> dict[str, Any]:
@@ -667,10 +743,18 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
     @app.post("/api/appeal-all")
     async def appeal_all(req: AppealRequest) -> dict[str, Any]:
         targets = [a for a in hub.store.list_accounts() if a.authenticated and a.device]
-        jid = hub.start_job(f"Снятие огранов ({len(targets)} акк.)", total=max(1, len(targets)))
-        out = []
-        try:
-            for acc in targets:
+        eff_threads = max(1, min(15, int(req.threads)))
+        jid = hub.start_job(
+            f"Снятие огранов ({len(targets)} акк. · {eff_threads} пот.)",
+            total=max(1, len(targets)),
+            threads=eff_threads,
+        )
+        sem = asyncio.Semaphore(eff_threads)
+        out: list[dict[str, Any]] = []
+
+        async def _one(acc: AccountRecord) -> None:
+            async with sem:
+                hub.worker_enter(jid, acc.account_id)
                 try:
                     if req.settle and not req.dry_run:
                         s = await wait_and_appeal_settle(
@@ -699,20 +783,58 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
                 except Exception as exc:
                     hub.push_event(f"[{acc.account_id}] Ошибка апелляции: {exc}", "error")
                 finally:
+                    hub.worker_exit(jid, acc.account_id)
                     hub.step_job(jid)
+
+        try:
+            await asyncio.gather(*(_one(acc) for acc in targets))
         finally:
             hub.end_job(jid)
         hub.push_event(f"Массовое снятие огранов завершено ({len(out)}/{len(targets)} акк.)", "success", kind="audit_updated")
-        return {"ok": True, "results": out}
+        return {"ok": True, "results": out, "threads": eff_threads}
 
     @app.post("/api/bulk-action")
     async def bulk_action(req: BulkActionRequest) -> dict[str, Any]:
         ids = [x for x in req.account_ids if x]
         if not ids:
             raise HTTPException(status_code=400, detail="Не выбрано ни одного аккаунта.")
+        eff_threads = max(1, min(15, int(req.threads)))
+
+        if req.action == "unban_queue":
+            unban_queue.store = hub.store
+            res = unban_queue.enqueue(
+                ids,
+                threads=eff_threads,
+                wait_settle=True,
+                appeal_studio_posts=req.appeal_studio_posts,
+                hide_rejected=req.hide_rejected,
+                appeal_text=req.reason,
+                clear_finished=False,
+            )
+            return {"ok": True, "queued": len(res["added"]), "threads": eff_threads, "snapshot": res["snapshot"]}
 
         async def _run_bulk() -> None:
-            jid = hub.start_job(f"Пакетное действие `{req.action}` ({len(ids)} акк.)", total=len(ids))
+            jid = hub.start_job(
+                f"Пакетное `{req.action}` ({len(ids)} акк. · {eff_threads} пот.)",
+                total=len(ids),
+                threads=eff_threads,
+            )
+            sem = asyncio.Semaphore(eff_threads)
+
+            async def _par(worker_coro) -> None:
+                async def _wrap(idx: int, aid: str) -> None:
+                    if idx < eff_threads and eff_threads > 1:
+                        await asyncio.sleep(idx * 0.35)
+                    async with sem:
+                        hub.worker_enter(jid, aid)
+                        try:
+                            await worker_coro(aid)
+                        finally:
+                            hub.worker_exit(jid, aid)
+                            hub.step_job(jid)
+
+                await asyncio.gather(*(_wrap(i, a) for i, a in enumerate(ids)))
+
             try:
                 if req.action == "delete":
                     for aid in ids:
@@ -753,7 +875,8 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
                 if req.action == "auth":
                     async with KintaroClient(hub.cfg) as client:
                         pipeline = AutomationPipeline(hub.cfg, hub.store, client)
-                        for aid in ids:
+
+                        async def _do_auth(aid: str) -> None:
                             try:
                                 acc = hub.store.load_account(aid)
                                 if not acc.authenticated or not acc.device:
@@ -762,15 +885,16 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
                                     hub.push_event(f"[{aid}] Вход выполнен успешно!", "success", kind="audit_updated")
                             except Exception as exc:
                                 hub.push_event(f"[{aid}] Ошибка входа: {exc}", "error")
-                            finally:
-                                hub.step_job(jid)
-                    hub.push_event("Пакетная авторизация завершена.", "success", kind="audit_updated")
+
+                        await _par(_do_auth)
+                    hub.push_event(f"Пакетная авторизация завершена ({eff_threads} пот.).", "success", kind="audit_updated")
                     return
 
                 if req.action == "clean_posts":
                     async with KintaroClient(hub.cfg) as client:
                         pipeline = AutomationPipeline(hub.cfg, hub.store, client)
-                        for aid in ids:
+
+                        async def _do_clean(aid: str) -> None:
                             try:
                                 acc = hub.store.load_account(aid)
                                 cnt = await pipeline.delete_all_account_posts(acc)
@@ -782,38 +906,39 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
                                 hub.push_event(f"[{aid}] 🗑 Удалено старых постов: {cnt}", "success", kind="audit_updated")
                             except Exception as exc:
                                 hub.push_event(f"[{aid}] Ошибка очистки постов: {exc}", "error")
-                            finally:
-                                hub.step_job(jid)
-                    hub.push_event("Пакетная очистка постов завершена.", "success", kind="audit_updated")
+
+                        await _par(_do_clean)
+                    hub.push_event(f"Пакетная очистка постов завершена ({eff_threads} пот.).", "success", kind="audit_updated")
                     return
 
                 if req.action == "restart":
                     async with KintaroClient(hub.cfg) as client:
                         pipeline = AutomationPipeline(hub.cfg, hub.store, client)
-                        for aid in ids:
+
+                        async def _do_restart(aid: str) -> None:
                             try:
                                 acc = hub.store.load_account(aid)
                                 await pipeline.restart_tiktok_app(acc, target_region=req.region)
                                 hub.push_event(f"[{aid}] 🔄 Приложение TikTok перезапущено", "success", kind="audit_updated")
                             except Exception as exc:
                                 hub.push_event(f"[{aid}] Ошибка рестарта: {exc}", "error")
-                            finally:
-                                hub.step_job(jid)
-                    hub.push_event("Пакетный рестарт завершён.", "success", kind="audit_updated")
+
+                        await _par(_do_restart)
+                    hub.push_event(f"Пакетный рестарт завершён ({eff_threads} пот.).", "success", kind="audit_updated")
                     return
 
                 if req.action == "audit":
-                    for aid in ids:
+                    async def _do_audit(aid: str) -> None:
                         try:
                             await hub.run_audit_one(aid)
                         except Exception as exc:
                             hub.push_event(f"[{aid}] Ошибка аудита: {exc}", "error")
-                        finally:
-                            hub.step_job(jid)
+
+                    await _par(_do_audit)
                     return
 
                 if req.action == "appeal":
-                    for aid in ids:
+                    async def _do_appeal(aid: str) -> None:
                         try:
                             acc = hub.store.load_account(aid)
                             s = await remove_account_restrictions(
@@ -830,29 +955,30 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
                                 hub._save_audit_cache()
                         except Exception as exc:
                             hub.push_event(f"[{aid}] Ошибка апелляции: {exc}", "error")
-                        finally:
-                            hub.step_job(jid)
-                    hub.push_event("Пакетное снятие огранов завершено.", "success", kind="audit_updated")
+
+                    await _par(_do_appeal)
+                    hub.push_event(f"Пакетное снятие огранов завершено ({eff_threads} пот.).", "success", kind="audit_updated")
                     return
 
                 if req.action == "warmup":
                     async with KintaroClient(hub.cfg) as client:
                         pipeline = AutomationPipeline(hub.cfg, hub.store, client)
-                        for aid in ids:
+
+                        async def _do_warmup(aid: str) -> None:
                             try:
                                 acc = hub.store.load_account(aid)
                                 st = await pipeline.run_warmup(acc)
                                 hub.push_event(f"[{aid}] Прогрев готов: views={st['views']}, likes={st['likes']}", "success")
                             except Exception as exc:
                                 hub.push_event(f"[{aid}] Ошибка прогрева: {exc}", "error")
-                            finally:
-                                hub.step_job(jid)
-                    hub.push_event("Пакетный прогрев завершён.", "success", kind="audit_updated")
+
+                        await _par(_do_warmup)
+                    hub.push_event(f"Пакетный прогрев завершён ({eff_threads} пот.).", "success", kind="audit_updated")
             finally:
                 hub.end_job(jid)
 
         asyncio.create_task(_run_bulk())
-        return {"ok": True, "queued": len(ids)}
+        return {"ok": True, "queued": len(ids), "threads": eff_threads}
 
     @app.post("/api/accounts/{account_id}/auth")
     async def auth_account(account_id: str) -> dict[str, Any]:
@@ -1089,12 +1215,22 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
 
         hub.push_event(f"Импортировано аккаунтов: {len(imported_ids)}", "success", kind="audit_updated")
 
+        eff_threads = max(1, min(15, int(req.threads)))
+
         async def _bg_pipeline() -> None:
-            jid = hub.start_job(f"Авто-вход и разбан ({len(imported_ids)} акк.)", total=len(imported_ids))
-            try:
-                async with KintaroClient(hub.cfg) as client:
-                    pipeline = AutomationPipeline(hub.cfg, hub.store, client)
-                    for aid in imported_ids:
+            jid = hub.start_job(
+                f"Авто-вход и разбан ({len(imported_ids)} акк. · {eff_threads} пот.)",
+                total=len(imported_ids),
+                threads=eff_threads,
+            )
+            sem = asyncio.Semaphore(eff_threads)
+
+            async def _one(idx: int, aid: str, pipeline: AutomationPipeline) -> None:
+                if idx < eff_threads and eff_threads > 1:
+                    await asyncio.sleep(idx * 0.6)
+                async with sem:
+                    hub.worker_enter(jid, aid)
+                    try:
                         acc = hub.store.load_account(aid)
                         if req.auto_login and (not acc.authenticated or not acc.device):
                             try:
@@ -1103,8 +1239,7 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
                                 hub.push_event(f"[{aid}] Вход выполнен успешно!", "success", kind="audit_updated")
                             except Exception as exc:
                                 hub.push_event(f"[{aid}] Ошибка входа: {exc}", "error")
-                                hub.step_job(jid)
-                                continue
+                                return
                         if req.auto_clean_posts and acc.authenticated and acc.device:
                             try:
                                 del_cnt = await pipeline.delete_all_account_posts(acc)
@@ -1123,14 +1258,21 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
                                 hub.push_event(f"[{aid}] Проверка и снятие огранов завершены!", "success", kind="audit_updated")
                             except Exception as exc:
                                 hub.push_event(f"[{aid}] Ошибка снятия огранов: {exc}", "error")
+                    finally:
+                        hub.worker_exit(jid, aid)
                         hub.step_job(jid)
+
+            try:
+                async with KintaroClient(hub.cfg) as client:
+                    pipeline = AutomationPipeline(hub.cfg, hub.store, client)
+                    await asyncio.gather(*(_one(i, aid, pipeline) for i, aid in enumerate(imported_ids)))
             finally:
                 hub.end_job(jid)
 
         if req.auto_login or req.auto_clean_posts or req.auto_appeal:
             asyncio.create_task(_bg_pipeline())
 
-        return {"ok": True, "imported": imported_ids}
+        return {"ok": True, "imported": imported_ids, "threads": eff_threads}
 
     @app.post("/api/import-folder")
     async def import_folder(req: FolderImportRequest) -> dict[str, Any]:
@@ -1217,6 +1359,7 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
         delete_old_posts: bool = Form(False),
         appeal_after_upload: bool = Form(False),
         settle_after_upload: bool = Form(True),
+        threads: int = Form(5),
     ) -> dict[str, Any]:
         if not files:
             raise HTTPException(status_code=400, detail="Файлы не выбраны.")
@@ -1232,70 +1375,94 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
         first_ext = saved_paths[0].suffix.lower()
         is_video = first_ext == ".mp4"
         targets = [x.strip() for x in account_ids.split(",") if x.strip()] or [None]
+        eff_threads = max(1, min(15, int(threads)))
 
-        results = []
-        jid = hub.start_job(f"Анти-тень залив ({len(targets)} акк.)", total=len(targets))
+        results: list[dict[str, Any]] = []
+        jid = hub.start_job(
+            f"Анти-тень залив ({len(targets)} акк. · {eff_threads} пот.)",
+            total=len(targets),
+            threads=eff_threads,
+        )
+        sem = asyncio.Semaphore(eff_threads)
         try:
             async with KintaroClient(hub.cfg) as client:
                 pipeline = AutomationPipeline(hub.cfg, hub.store, client)
-                for tid in targets:
-                    task = UploadTask(
-                        task_id=f"web_{uuid.uuid4().hex[:8]}",
-                        account_id=tid,
-                        media_type="video" if is_video else "photo",
-                        video_path=str(saved_paths[0]) if is_video else None,
-                        photo_paths=[] if is_video else [str(p) for p in saved_paths],
-                        description=description,
-                        music_search_keyword=music_search.strip() or None,
-                    )
-                    try:
-                        acc, rec = await pipeline.execute_upload_task(
-                            task,
-                            force_cooldown=force_cooldown,
-                            skip_warmup=skip_warmup,
-                            delete_old_posts=delete_old_posts,
-                            appeal_after_upload=appeal_after_upload,
-                            settle_after_upload=settle_after_upload,
+
+                async def _one(tid: str | None) -> None:
+                    async with sem:
+                        hub.worker_enter(jid, tid or "auto")
+                        task = UploadTask(
+                            task_id=f"web_{uuid.uuid4().hex[:8]}",
+                            account_id=tid,
+                            media_type="video" if is_video else "photo",
+                            video_path=str(saved_paths[0]) if is_video else None,
+                            photo_paths=[] if is_video else [str(p) for p in saved_paths],
+                            description=description,
+                            music_search_keyword=music_search.strip() or None,
                         )
-                        hub.push_event(
-                            f"[{acc.account_id}] Успешно залит пост! aweme_id={rec.aweme_id}",
-                            "success",
-                            kind="audit_updated",
-                        )
-                        results.append({"ok": True, "account_id": acc.account_id, "aweme_id": rec.aweme_id})
-                    except Exception as exc:
-                        hub.push_event(f"[{tid or 'auto'}] Ошибка залива: {exc}", "error")
-                        results.append({"ok": False, "account_id": tid or "auto", "error": str(exc)})
-                    finally:
-                        hub.step_job(jid)
+                        try:
+                            acc, rec = await pipeline.execute_upload_task(
+                                task,
+                                force_cooldown=force_cooldown,
+                                skip_warmup=skip_warmup,
+                                delete_old_posts=delete_old_posts,
+                                appeal_after_upload=appeal_after_upload,
+                                settle_after_upload=settle_after_upload,
+                            )
+                            hub.push_event(
+                                f"[{acc.account_id}] Успешно залит пост! aweme_id={rec.aweme_id}",
+                                "success",
+                                kind="audit_updated",
+                            )
+                            results.append({"ok": True, "account_id": acc.account_id, "aweme_id": rec.aweme_id})
+                        except Exception as exc:
+                            hub.push_event(f"[{tid or 'auto'}] Ошибка залива: {exc}", "error")
+                            results.append({"ok": False, "account_id": tid or "auto", "error": str(exc)})
+                        finally:
+                            hub.worker_exit(jid, tid or "auto")
+                            hub.step_job(jid)
+
+                await asyncio.gather(*(_one(tid) for tid in targets))
         finally:
             hub.end_job(jid)
-        return {"ok": any(r["ok"] for r in results), "results": results}
+        return {"ok": any(r["ok"] for r in results), "results": results, "threads": eff_threads}
 
     @app.post("/api/shadows/check")
-    async def check_shadows_api(threshold_minutes: float = 45.0) -> dict[str, Any]:
+    async def check_shadows_api(threshold_minutes: float = 45.0, threads: int = 5) -> dict[str, Any]:
         targets = [a for a in hub.store.list_accounts() if a.authenticated and a.upload_history]
-        jid = hub.start_job(f"Радар теней ({len(targets)} акк.)", total=max(1, len(targets)))
+        eff_threads = max(1, min(15, int(threads)))
+        jid = hub.start_job(
+            f"Радар теней ({len(targets)} акк. · {eff_threads} пот.)",
+            total=max(1, len(targets)),
+            threads=eff_threads,
+        )
+        sem = asyncio.Semaphore(eff_threads)
         reports_out: list[dict[str, Any]] = []
         try:
             async with KintaroClient(hub.cfg) as client:
                 pipeline = AutomationPipeline(hub.cfg, hub.store, client)
-                for acc in targets:
-                    try:
-                        reps = await pipeline.check_account_shadows(
-                            acc, zero_view_threshold_minutes=threshold_minutes
-                        )
-                        for r in reps:
-                            reports_out.append(r.model_dump(mode="json"))
-                    except Exception as exc:
-                        hub.push_event(f"[{acc.account_id}] Ошибка радара теней: {exc}", "warn")
-                    finally:
-                        hub.step_job(jid)
+
+                async def _one(acc: AccountRecord) -> None:
+                    async with sem:
+                        hub.worker_enter(jid, acc.account_id)
+                        try:
+                            reps = await pipeline.check_account_shadows(
+                                acc, zero_view_threshold_minutes=threshold_minutes
+                            )
+                            for r in reps:
+                                reports_out.append(r.model_dump(mode="json"))
+                        except Exception as exc:
+                            hub.push_event(f"[{acc.account_id}] Ошибка радара теней: {exc}", "warn")
+                        finally:
+                            hub.worker_exit(jid, acc.account_id)
+                            hub.step_job(jid)
+
+                await asyncio.gather(*(_one(acc) for acc in targets))
         finally:
             hub.end_job(jid)
         hub.shadow_cache = reports_out
         hub.push_event(f"Радар теней завершён: проверено постов из истории {len(reports_out)}", "success", kind="audit_updated")
-        return {"ok": True, "reports": reports_out}
+        return {"ok": True, "reports": reports_out, "threads": eff_threads}
 
     @app.post("/api/proxies/test")
     async def test_proxies(req: ProxyTestRequest) -> dict[str, Any]:
@@ -1459,6 +1626,8 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
         delete_old_posts: bool = Form(True),
         auto_appeal_2048: bool = Form(True),
         appeal_quiet_window_sec: float = Form(60.0),
+        defer_post_appeal_to_queue: bool = Form(False),
+        appeal_queue_threads: int = Form(3),
         pin_sticky_proxy: bool = Form(False),
         override_proxy_country: str = Form(""),
     ) -> dict[str, Any]:
@@ -1515,10 +1684,42 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
             auto_music_query=auto_music_query,
             auto_appeal_2048=auto_appeal_2048,
             appeal_quiet_window_sec=appeal_quiet_window_sec,
+            defer_post_appeal_to_queue=defer_post_appeal_to_queue,
+            appeal_queue_threads=max(1, min(15, appeal_queue_threads)),
         )
 
         total_accs = len(targets) if targets else max(1, len(hub.store.list_accounts()))
-        jid = hub.start_job(f"🚀 Кампания {copies_count}x ({photo_mode}, {threads} пот.)", total=total_accs)
+        jid = hub.start_job(
+            f"🚀 Кампания {copies_count}x ({photo_mode}, {threads} пот.)",
+            total=total_accs,
+            threads=threads,
+        )
+
+        def _camp_progress(aid: str, msg: str, meta: dict[str, Any]) -> None:
+            st = meta.get("status")
+            if st in ("completed", "partial", "error", "upload_failed"):
+                hub.worker_exit(jid, aid)
+                hub.step_job(jid)
+            else:
+                hub.worker_enter(jid, aid)
+            hub.push_event(f"[{aid}] {msg}", "info", kind="audit_updated")
+
+        def _handoff_to_unban_queue(acc_obj: AccountRecord, _res_obj: Any) -> None:
+            unban_queue.store = hub.store
+            unban_queue.enqueue(
+                [acc_obj.account_id],
+                threads=camp.appeal_queue_threads,
+                wait_settle=True,
+                quiet_seconds=camp.appeal_quiet_window_sec,
+                max_wait_seconds=240.0,
+                only_account_ineligible=True,
+                appeal_studio_posts=False,
+                hide_rejected=True,
+                sort_to_folders=camp.sort_to_folders,
+                appeal_text=camp.appeal_text,
+                initial_wait_sec=camp.appeal_post_wait_sec,
+                clear_finished=False,
+            )
 
         async def _bg_campaign() -> None:
             try:
@@ -1526,10 +1727,8 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
                     pipeline = AutomationPipeline(hub.cfg, hub.store, client)
                     results = await pipeline.run_anti_shadow_campaign(
                         camp,
-                        progress_cb=lambda aid, msg, meta: (
-                            hub.push_event(f"[{aid}] {msg}", "info", kind="audit_updated"),
-                            hub.step_job(jid) if meta.get("status") in ("completed", "partial", "error", "upload_failed") else None,
-                        ),
+                        progress_cb=_camp_progress,
+                        on_account_uploaded=_handoff_to_unban_queue if camp.defer_post_appeal_to_queue else None,
                     )
                 rep_file = Path(hub.cfg.state_dir) / "last_campaign_report.json"
                 rep_file.write_text(
@@ -1597,6 +1796,179 @@ def create_web_app(config_path: Path | None = None) -> FastAPI:
     async def delete_media_api(filename: str) -> dict[str, Any]:
         ok = delete_media_file(Path(hub.cfg.state_dir), filename)
         return {"ok": ok, "files": list_media_library(Path(hub.cfg.state_dir))}
+
+    # ── 1-Click Copy Export & Standalone Multi-Thread / Trailing Unban Wave Queue ──
+
+    @app.get("/api/accounts/copy-export")
+    async def copy_export_accounts_api(
+        scope: str = "uploaded",
+        fmt: str = "lines",
+        ids: str = "",
+    ) -> dict[str, Any]:
+        hub.reload_env()
+        req_ids = [x.strip() for x in ids.split(",") if x.strip()] if ids.strip() else None
+        return build_accounts_copy_payload(
+            hub.store,
+            Path(hub.cfg.state_dir),
+            scope=scope,
+            fmt=fmt,
+            ids=req_ids,
+            audit_cache=hub.audit_cache,
+        )
+
+    @app.get("/api/unban-queue/status")
+    async def unban_queue_status_api() -> dict[str, Any]:
+        return unban_queue.snapshot()
+
+    @app.post("/api/unban-queue/start")
+    async def unban_queue_start_api(req: UnbanQueueStartRequest) -> dict[str, Any]:
+        hub.reload_env()
+        unban_queue.store = hub.store
+        sdir = Path(hub.cfg.state_dir)
+
+        target_ids: list[str] = []
+        if req.account_ids:
+            target_ids = [x.strip() for x in req.account_ids if x.strip()]
+        elif req.scope == "uploaded":
+            payload = build_accounts_copy_payload(
+                hub.store, sdir, scope="uploaded", fmt="lines", audit_cache=hub.audit_cache
+            )
+            target_ids = [it["account_id"] for it in payload["items"]]
+        elif req.scope == "restricted":
+            for a in hub.store.list_accounts():
+                if not (a.authenticated and a.device):
+                    continue
+                aud = hub.audit_cache.get(a.account_id) or {}
+                if aud.get("account_health") in ("action_required", "appealing") or not aud:
+                    target_ids.append(a.account_id)
+        else:  # "all" or fallback
+            target_ids = [a.account_id for a in hub.store.list_accounts() if a.authenticated and a.device]
+
+        if not target_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="Нет подходящих авторизованных аккаунтов для выбранного режима очереди.",
+            )
+
+        res = unban_queue.enqueue(
+            target_ids,
+            threads=req.threads,
+            wait_settle=req.wait_settle,
+            quiet_seconds=req.quiet_seconds,
+            max_wait_seconds=req.max_wait_seconds,
+            poll_interval_seconds=req.poll_interval_seconds,
+            only_account_ineligible=req.only_account_ineligible,
+            appeal_studio_posts=req.appeal_studio_posts,
+            hide_rejected=req.hide_rejected,
+            sort_to_folders=req.sort_to_folders,
+            appeal_text=req.appeal_text,
+            clear_finished=req.clear_finished,
+        )
+        if not res["added"] and not unban_queue.snapshot()["running"]:
+            raise HTTPException(
+                status_code=400,
+                detail="Выбранные аккаунты не авторизованы (нет активной сессии x-device).",
+            )
+        return {"ok": True, **res}
+
+    @app.post("/api/unban-queue/stop")
+    async def unban_queue_stop_api() -> dict[str, Any]:
+        return unban_queue.stop()
+
+    @app.post("/api/unban-queue/clear")
+    async def unban_queue_clear_api() -> dict[str, Any]:
+        return unban_queue.clear_finished()
+
+    # ── Pro Shadowban & Moderation Checker (Public + Deep 2048/Studio) ───────
+
+    @app.get("/api/shadow-checker/last")
+    async def shadow_checker_last_api() -> dict[str, Any]:
+        cache_fp = Path(hub.cfg.state_dir) / "last_shadow_check.json"
+        if not cache_fp.is_file():
+            return {"ok": True, "counts": {}, "results": []}
+        try:
+            return json.loads(cache_fp.read_text(encoding="utf-8"))
+        except Exception:
+            return {"ok": True, "counts": {}, "results": []}
+
+    @app.post("/api/shadow-checker/run")
+    async def shadow_checker_run_api(req: ShadowCheckerRequest) -> dict[str, Any]:
+        hub.reload_env()
+        sdir = Path(hub.cfg.state_dir)
+        usernames: list[str] = []
+        if req.usernames_text.strip():
+            usernames = [ln.strip() for ln in req.usernames_text.splitlines() if ln.strip()]
+        elif req.account_ids:
+            for aid in req.account_ids:
+                try:
+                    a = hub.store.load_account(aid)
+                    usernames.append(a.username or a.account_id)
+                except Exception:
+                    usernames.append(aid)
+        elif req.scope == "uploaded":
+            payload = build_accounts_copy_payload(
+                hub.store, sdir, scope="uploaded", fmt="usernames", audit_cache=hub.audit_cache
+            )
+            usernames = [it["username"] for it in payload["items"]]
+        else:
+            usernames = [a.username or a.account_id for a in hub.store.list_accounts()]
+
+        if not usernames:
+            raise HTTPException(status_code=400, detail="Вставь хотя бы один @username или выбери аккаунты.")
+
+        eff_threads = max(1, min(15, int(req.threads)))
+        jid = hub.start_job(
+            f"👁 Чекер тени ({len(usernames)} акк. · {eff_threads} пот.)",
+            total=len(usernames),
+            threads=eff_threads,
+        )
+
+        def _on_done(uname: str, res: dict[str, Any]) -> None:
+            hub.worker_exit(jid, uname)
+            hub.step_job(jid)
+            ad = res.get("audit_dict")
+            if isinstance(ad, dict) and res.get("owned"):
+                ad_copy = dict(ad)
+                ad_copy["audited_at"] = datetime.now().strftime("%H:%M:%S")
+                hub.audit_cache[res["account_id"]] = ad_copy
+                hub._save_audit_cache()
+            lvl = "success" if res["verdict"] == "clean" else ("warn" if res["verdict"] == "partial_shadow" else "error")
+            hub.push_event(
+                f"[@{uname}] {res['verdict_label']} | score={res['health_score']}/100 | "
+                f"постов={res['public_posts_count']}/{res['total_posts']} | просм.={res['total_views']}",
+                lvl,
+            )
+
+        try:
+            async with KintaroClient(hub.cfg) as client:
+                out = await run_batch_shadowban_check(
+                    client,
+                    hub.store,
+                    usernames=usernames,
+                    threads=eff_threads,
+                    deep_audit=req.deep_audit,
+                    max_posts=max(1, min(35, int(req.max_posts))),
+                    zero_view_threshold_minutes=max(0.0, float(req.zero_view_threshold_minutes)),
+                    on_start=lambda u: hub.worker_enter(jid, u),
+                    on_done=_on_done,
+                )
+        except Exception as exc:
+            hub.push_event(f"❌ Ошибка чекера тени: {exc}", "error")
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            hub.end_job(jid)
+
+        cache_fp = sdir / "last_shadow_check.json"
+        cache_fp.parent.mkdir(parents=True, exist_ok=True)
+        cache_fp.write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
+        c = out["counts"]
+        hub.push_event(
+            f"👁 Чекер тени завершён: чисто={c['clean']}, подозр={c['partial_shadow']}, "
+            f"в тени={c['shadowbanned']}, нет постов={c['no_public_posts']}, просм.={c['total_views']}",
+            "success",
+            kind="audit_updated",
+        )
+        return out
 
     # ── Sorted Folders & Bulk Session / CSV Exports ──────────────────────────
     @app.get("/api/folders")

@@ -923,3 +923,270 @@ async def test_delete_all_posts_studio_and_kintaro_union_and_upload_cleanup_appe
     assert "shared_2" not in remaining_hist
     assert "keep_me" in remaining_hist
     assert "fresh_new_999" in remaining_hist
+
+
+def test_copy_export_formats_and_sorted_folders(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+    from kintaro_auto.appeals import sort_account_into_folder
+    from kintaro_auto.models import UploadedPostRecord
+    from kintaro_auto.storage import StateStore, format_account_copy_line, parse_shop_account_line
+    from kintaro_auto.web import create_web_app
+
+    sdir = tmp_path / "state"
+    cfg_path = tmp_path / "config.toml"
+    cfg_path.write_text(f'state_dir = "{sdir}"\n', encoding="utf-8")
+
+    store = StateStore(sdir)
+    raw_line_1 = "u_copy_1:ttPass!1:mail1@outlook.com:mPass1:rec1@vargosmail.com:rPass1:BASE32SECRET1"
+    acc1 = parse_shop_account_line(raw_line_1, proxy="socks5://u:p@127.0.0.1:1080", region="US")
+    acc1.authenticated = True
+    acc1.device = {"cookies": {"sessionid": "s1"}}
+    acc1.upload_history = [
+        UploadedPostRecord(aweme_id="7700111", media_type="photo", source_files=[], description="#fyp"),
+        UploadedPostRecord(aweme_id="7700112", media_type="photo", source_files=[], description="#fyp"),
+    ]
+    store.save_account(acc1)
+
+    acc2 = AccountRecord(
+        account_id="u_copy_2",
+        username="u_copy_2",
+        password="p2",
+        email="u2@example.com",
+        totp_token="TOTP222222222222",
+        proxy="socks5://u:p@127.0.0.1:1080",
+        region="US",
+        authenticated=True,
+        device={"cookies": {"sessionid": "s2"}},
+    )
+    store.save_account(acc2)
+    sort_account_into_folder(sdir, "clean", acc1)
+
+    assert format_account_copy_line(acc1) == raw_line_1
+    assert format_account_copy_line(acc2) == "u_copy_2|p2|u2@example.com|TOTP222222222222"
+
+    app = create_web_app(cfg_path)
+    tc = TestClient(app)
+
+    # Uploaded scope returns only acc1 (which has upload_history)
+    r_lines = tc.get("/api/accounts/copy-export?scope=uploaded&fmt=lines")
+    assert r_lines.status_code == 200
+    body_l = r_lines.json()
+    assert body_l["count"] == 1
+    assert body_l["text"] == raw_line_1
+
+    r_unames = tc.get("/api/accounts/copy-export?scope=uploaded&fmt=usernames")
+    assert r_unames.json()["text"] == "@u_copy_1"
+
+    r_urls = tc.get("/api/accounts/copy-export?scope=uploaded&fmt=urls")
+    assert r_urls.json()["count"] == 2
+    assert "https://www.tiktok.com/@u_copy_1/photo/7700111" in r_urls.json()["text"]
+
+    # Selected scope returns both in order
+    r_sel = tc.get("/api/accounts/copy-export?scope=selected&fmt=lines&ids=u_copy_2,u_copy_1")
+    assert r_sel.json()["count"] == 2
+    assert r_sel.json()["text"].splitlines()[0] == "u_copy_2|p2|u2@example.com|TOTP222222222222"
+
+    # Clean sorted folder copy
+    r_clean = tc.get("/api/accounts/copy-export?scope=clean&fmt=lines")
+    assert r_clean.json()["count"] == 1
+    assert r_clean.json()["text"] == raw_line_1
+
+
+async def test_unban_wave_queue_manager_and_deferred_campaign_handoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+    from kintaro_auto.appeals import AccountAppealSummary, AccountAuditResult
+    from kintaro_auto.models import CampaignConfig
+    from kintaro_auto.studio_ops import UnbanWaveQueueManager
+
+    sdir = tmp_path / "state"
+    store = StateStore(sdir)
+    for idx in (1, 2):
+        store.save_account(
+            AccountRecord(
+                account_id=f"uq_{idx}",
+                username=f"uq_{idx}",
+                proxy="socks5://u:p@127.0.0.1:1080",
+                region="US",
+                authenticated=True,
+                device={"cookies": {"sessionid": f"s{idx}"}},
+            )
+        )
+
+    processed: list[str] = []
+
+    async def fake_settle(acc: AccountRecord, **kwargs: Any) -> AccountAppealSummary:
+        cb = kwargs.get("progress_cb")
+        if cb:
+            cb({"appeals_sent": 2, "active_remaining": 0, "reviewing_count": 0, "idle_sec": 5, "quiet_sec": 5, "elapsed_sec": 5})
+        processed.append(acc.account_id)
+        aud = AccountAuditResult(
+            account_id=acc.account_id,
+            username=acc.username or acc.account_id,
+            uniq_id=acc.username or acc.account_id,
+            nickname=acc.username or acc.account_id,
+            avatar_url="",
+            uid="100",
+            reg_country="US",
+            current_region="US",
+            idc_gateway="https://api16-normal-c-alisg.tiktokv.com",
+            proxy_ip="1.2.3.4",
+            proxy_country="US",
+            account_health="eligible",
+        )
+        return AccountAppealSummary(account_id=acc.account_id, audit=aud, notice_appeals_verified=2)
+
+    monkeypatch.setattr("kintaro_auto.studio_ops.wait_and_appeal_settle", fake_settle)
+
+    mgr = UnbanWaveQueueManager(store, sdir)
+    res = mgr.enqueue(["uq_1", "uq_2"], threads=2, wait_settle=True, quiet_seconds=0.0, poll_interval_seconds=0.05)
+    assert res["added"] == ["uq_1", "uq_2"]
+    for _ in range(50):
+        if not mgr.snapshot()["running"]:
+            break
+        await asyncio.sleep(0.02)
+
+    snap = mgr.snapshot()
+    assert snap["running"] is False
+    assert sorted(processed) == ["uq_1", "uq_2"]
+    assert snap["counts"]["clean"] == 2
+    assert snap["counts"]["appeals_total"] == 4
+    assert (sdir / "sorted_accounts" / "clean" / "clean_accounts.txt").is_file()
+
+    # Also verify CampaignConfig.defer_post_appeal_to_queue hands off instead of inline Stage-3 wait
+    slide = tmp_path / "s.jpg"
+    Image.new("RGB", (320, 480), (40, 80, 120)).save(slide, format="JPEG")
+
+    def kt_handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/v1/post/create/photo":
+            return httpx.Response(200, json={"aweme_id": "88001"})
+        if req.url.path == "/v1/account/posts":
+            return httpx.Response(200, json={"aweme_list": [{"aweme_id": "88001", "statistics": {"play_count": 12}}]})
+        return httpx.Response(200, json={"status_code": 0})
+
+    inline_settle_called = False
+
+    async def fail_if_inline_called(*_a: Any, **_kw: Any) -> AccountAppealSummary:
+        nonlocal inline_settle_called
+        inline_settle_called = True
+        raise AssertionError("Inline Stage-3 wait_and_appeal_settle must be skipped when deferred to queue!")
+
+    monkeypatch.setattr("kintaro_auto.pipeline.wait_and_appeal_settle", fail_if_inline_called)
+    handed_off: list[str] = []
+
+    cfg = AppConfig(state_dir=str(sdir))
+    cfg.api.api_key = "demo-key"
+    cfg.api.save_raw_responses = False
+    cfg.uniquifier.temp_dir = str(tmp_path / "tmp_m")
+
+    async def fast_sleep(_: float) -> None:
+        return None
+
+    async with KintaroClient(cfg, transport=httpx.MockTransport(kt_handler)) as client:
+        pipe = AutomationPipeline(cfg, store, client, sleep_fn=fast_sleep, rng=random.Random(7))
+        camp = CampaignConfig(
+            account_ids=["uq_1"],
+            media_type="photo",
+            media_paths=[str(slide)],
+            copies_count=1,
+            threads=1,
+            delay_min_sec=0.0,
+            delay_max_sec=0.0,
+            delete_old_posts=False,
+            auto_music_query="",
+            auto_appeal_2048=True,
+            appeal_pre_upload=False,
+            appeal_inter_post=False,
+            appeal_post_upload=True,
+            defer_post_appeal_to_queue=True,
+            appeal_queue_threads=3,
+        )
+        out = await pipe.run_anti_shadow_campaign(
+            camp,
+            on_account_uploaded=lambda acc, _r: handed_off.append(acc.account_id),
+        )
+
+    assert inline_settle_called is False
+    assert handed_off == ["uq_1"]
+    assert out[0].folder_key == "queued_unban"
+    assert out[0].posts_published == 1
+
+
+async def test_pro_shadowban_checker_detects_real_tiktok_flags(tmp_path: Path) -> None:
+    import time as _t
+    from kintaro_auto.shadow_checker import inspect_aweme_shadow_signals, run_batch_shadowban_check
+
+    now = _t.time()
+    clean_item = {
+        "aweme_id": "77120001",
+        "aweme_type": 150,
+        "desc": "#fyp #piratetoken",
+        "region": "US",
+        "create_time": int(now - 3600),
+        "is_nff_or_nr": False,
+        "statistics": {"play_count": 145, "digg_count": 12, "comment_count": 1, "share_count": 2, "collect_count": 3},
+        "status": {"is_delete": False, "is_prohibited": False, "in_reviewing": False, "reviewed": 1, "self_see": False, "private_status": 0, "allow_share": True, "review_result": {"review_status": 0}, "violation_display_status": 0},
+        "risk_infos": {"risk_sink": False, "warn": False, "type": 0},
+    }
+    shadow_item = {
+        "aweme_id": "77120002",
+        "aweme_type": 150,
+        "desc": "#fyp",
+        "region": "US",
+        "create_time": int(now - 3600),
+        "is_nff_or_nr": True,
+        "statistics": {"play_count": 0, "digg_count": 0, "comment_count": 0, "share_count": 0, "collect_count": 0},
+        "status": {"is_delete": False, "is_prohibited": False, "in_reviewing": False, "reviewed": 1, "self_see": False, "private_status": 0, "allow_share": True, "review_result": {"review_status": 0}, "violation_display_status": 0},
+        "risk_infos": {"risk_sink": True, "warn": False, "type": 0},
+    }
+
+    r_clean = inspect_aweme_shadow_signals(clean_item, username="clean_u", now_ts=now)
+    assert r_clean["shadow_code"] == "no"
+    assert r_clean["shadow_label"] == "Нет"
+    assert r_clean["moderation_label"] == "Пройдена"
+    assert r_clean["region_flag"] == "🇺🇸"
+
+    r_shadow = inspect_aweme_shadow_signals(shadow_item, username="bad_u", now_ts=now)
+    assert r_shadow["shadow_code"] == "yes"
+    assert r_shadow["shadow_label"] == "Да"
+    assert any("is_nff_or_nr" in x for x in r_shadow["reasons"])
+    assert any("risk_sink" in x for x in r_shadow["reasons"])
+
+    def kt_handler(req: httpx.Request) -> httpx.Response:
+        u = req.url.params.get("username", "")
+        if req.url.path == "/v1/user/get":
+            return httpx.Response(200, json={"user": {"unique_id": u, "follower_count": 50, "aweme_count": 1}})
+        if req.url.path == "/v1/user/posts":
+            return httpx.Response(200, json={"aweme_list": [clean_item] if u == "clean_u" else [shadow_item]})
+        return httpx.Response(200, json={})
+
+    cfg = AppConfig(state_dir=str(tmp_path / "state"))
+    cfg.api.api_key = "demo"
+    cfg.api.save_raw_responses = False
+    store = StateStore(cfg.state_dir)
+    store.save_account(
+        AccountRecord(
+            account_id="probe_1",
+            username="probe_1",
+            proxy="socks5://u:p@127.0.0.1:1080",
+            region="US",
+            authenticated=True,
+            device={"cookies": {"sessionid": "s1"}},
+        )
+    )
+
+    async with KintaroClient(cfg, transport=httpx.MockTransport(kt_handler)) as client:
+        batch = await run_batch_shadowban_check(
+            client,
+            store,
+            usernames=["@clean_u", "https://www.tiktok.com/@bad_u"],
+            threads=4,
+            deep_audit=False,
+        )
+
+    assert batch["counts"]["total"] == 2
+    assert batch["counts"]["clean"] == 1
+    assert batch["counts"]["shadowbanned"] == 1
+    assert "🌟 Тень: Нет" in batch["results"][0]["telegram_text"]
+    assert "🌟 Тень: Да" in batch["results"][1]["telegram_text"]
